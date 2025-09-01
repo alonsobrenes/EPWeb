@@ -1,35 +1,45 @@
-import { Tooltip as ChakraTooltip, Portal } from '@chakra-ui/react'
-import * as React from 'react'
+// src/components/ui/tooltip.jsx
+import { Tooltip } from '@chakra-ui/react'
 
-export const Tooltip = React.forwardRef(function Tooltip(props, ref) {
-  const {
-    showArrow,
-    children,
-    disabled,
-    portalled = true,
-    content,
-    contentProps,
-    portalRef,
-    ...rest
-  } = props
-
-  if (disabled) return children
+/**
+ * Tip: wrapper para Chakra v3 Tooltip (namespace).
+ * Uso:
+ *   <Tip content="Buscar"><IconButton ...>{...}</IconButton></Tip>
+ *
+ * Props útiles:
+ * - content / label: texto del tooltip (content tiene prioridad)
+ * - openDelay / closeDelay: tiempos en ms
+ * - showArrow: muestra flecha (default: true)
+ * - asChild: si true, usa el elemento hijo como trigger sin wrapper
+ */
+export function Tip({
+  content,
+  label,
+  children,
+  openDelay = 200,
+  closeDelay = 80,
+  showArrow = true,
+  asChild = true,
+  ...rest
+}) {
+  const text = content ?? label
 
   return (
-    <ChakraTooltip.Root {...rest}>
-      <ChakraTooltip.Trigger asChild>{children}</ChakraTooltip.Trigger>
-      <Portal disabled={!portalled} container={portalRef}>
-        <ChakraTooltip.Positioner>
-          <ChakraTooltip.Content ref={ref} {...contentProps}>
-            {showArrow && (
-              <ChakraTooltip.Arrow>
-                <ChakraTooltip.ArrowTip />
-              </ChakraTooltip.Arrow>
-            )}
-            {content}
-          </ChakraTooltip.Content>
-        </ChakraTooltip.Positioner>
-      </Portal>
-    </ChakraTooltip.Root>
+    <Tooltip.Root openDelay={openDelay} closeDelay={closeDelay} {...rest}>
+      <Tooltip.Trigger asChild={asChild}>
+        {asChild ? (
+          children
+        ) : (
+          <span style={{ display: 'inline-flex', lineHeight: 0 }}>{children}</span>
+        )}
+      </Tooltip.Trigger>
+
+      <Tooltip.Positioner>
+        <Tooltip.Content>
+          {text}
+          {showArrow ? <Tooltip.Arrow /> : null}
+        </Tooltip.Content>
+      </Tooltip.Positioner>
+    </Tooltip.Root>
   )
-})
+}

@@ -1,5 +1,5 @@
 // src/theme.js
-import { createSystem, defaultConfig, defineConfig, defineRecipe } from "@chakra-ui/react"
+import { createSystem, defaultConfig, defineConfig, defineRecipe, Table } from "@chakra-ui/react"
 
 // --- Button recipe (ver sección 3) ---
 const buttonRecipe = defineRecipe({
@@ -48,31 +48,37 @@ const buttonRecipe = defineRecipe({
 const config = defineConfig({
   theme: {
     tokens: {
+      components: {
+    Button: { defaultProps: { colorPalette: "brand" } },
+    Badge:  { defaultProps: { colorPalette: "brand" } },
+    Switch: { defaultProps: { colorPalette: "brand" } },
+    Tabs:   { defaultProps: { colorPalette: "brand" } },
+    Progress:{ defaultProps: { colorPalette: "brand" } },
+    // agrega otros que uses seguido: Radio, Checkbox, Slider, etc.
+  },
       colors: {
         // Escala brand (negros y grises)
-        brand: {
-          50:  { value: "#f7f7f7" },
-          100: { value: "#ededed" },
-          200: { value: "#e3e3e3" },
-          300: { value: "#d1d1d1" }, // del SVG
-          400: { value: "#a8a8a8" },
-          500: { value: "#6f6f6f" },
-          600: { value: "#3d3d3d" },
-          700: { value: "#1f1f1f" },
-          800: { value: "#121212" },
-          900: { value: "#000000" }, // del SVG
-        },
+        // colors.brand.ts (o dentro de theme.tokens)
+      brand : {
+        50:  { value: "#E8F2F2" }, // teal muy claro (fondos suaves)
+        100: { value: "#CFE5E6" },
+        200: { value: "#A6CDD0" },
+        300: { value: "#7CB5B9" },
+        400: { value: "#549EA4" }, // bordes/hover
+        500: { value: "#3A858B" }, // color principal (botones, links)
+        600: { value: "#2E6B71" }, // hover/active
+        700: { value: "#24555A" }, // textos sobre tonos claros
+        800: { value: "#1B4448" },
+        900: { value: "#153238" }, // ¡match exacto con el fondo del logo!
+      },
       },
     },
     // Opcional: tokens semánticos para “brand”
     semanticTokens: {
       colors: {
-        brand: {
-          solid:    { value: "{colors.brand.600}" },
-          contrast: { value: "white" },
-          fg:       { value: "{colors.brand.700}" },
-          muted:    { value: "{colors.brand.600}" },
-        },
+        "bg.panel": { value: { _light: "brand.50",  _dark: "gray.900" } },
+      "bg.subtle":{ value: { _light: "brand.100", _dark: "gray.800" } },
+      "border.subtle": { value: { _light: "brand.300", _dark: "gray.700" } },
       },
     },
     // Registra el recipe del Button en el theme

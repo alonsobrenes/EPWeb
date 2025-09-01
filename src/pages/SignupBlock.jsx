@@ -2,27 +2,13 @@
 import React, { useRef, useState } from "react"
 import { useNavigate, useLocation, Link as RouterLink } from "react-router-dom"
 import { useAuth } from "../auth/AuthProvider"
-import api from "../api/client"
+import api from "../api/client" // ← corrige la ruta del client
 import { validateSignup, getPasswordStrength } from "../auth/authHelpers"
 import { toaster } from "../components/ui/toaster"
 
 import {
-  Avatar,
-  Box,
-  Button,
-  Card,
-  Container,
-  Field,
-  Flex,
-  Heading,
-  HStack,
-  Input,
-  InputGroup,
-  Link,
-  Stack,
-  Text,
-  Alert,
-  CloseButton,
+  Avatar, Box, Button, Card, Container, Field, Flex, Heading, HStack,
+  Input, InputGroup, Link, Stack, Text, Alert, CloseButton,
 } from "@chakra-ui/react"
 import { LuLock, LuMail, LuEye, LuEyeOff } from "react-icons/lu"
 import BrandLogo from "../components/BrandLogo"
@@ -50,13 +36,13 @@ export default function SignupBlock() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = location.state?.from?.pathname || "/"
+
+  // Si venías de una ruta protegida, vuelve ahí; si no, ve a /app
+  const fromPath = location.state?.from?.pathname
+  const redirectTo = typeof fromPath === "string" ? fromPath : "/app"
 
   const resetErrors = () => {
-    setFormError("")
-    setEmailError("")
-    setPasswordError("")
-    setConfirmError("")
+    setFormError(""); setEmailError(""); setPasswordError(""); setConfirmError("")
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -66,10 +52,7 @@ export default function SignupBlock() {
     resetErrors()
 
     const { errors, isValid, firstInvalid } = validateSignup({
-      email,
-      password,
-      confirmPassword,
-      enforceComplexity: true,
+      email, password, confirmPassword, enforceComplexity: true,
     })
 
     setEmailError(errors.email || "")
@@ -92,25 +75,25 @@ export default function SignupBlock() {
       const token = res?.data?.token
 
       if (token) {
-        // 2a) Signup devuelve token → iniciar sesión
+        // 2a) Signup devuelve token → iniciar sesión y entrar a redirectTo
         login(token)
         toaster.success({ title: "Cuenta creada", description: "Sesión iniciada" })
-        navigate("/", { replace: true })
+        navigate(redirectTo, { replace: true })
         return
       }
 
-      // 2b) Auto-login con fallback (email → userName)
+      // 2b) Auto-login fallback
       await sleep(150)
 
       const tryLogin = async () => {
         try {
           const r1 = await api.post("/Auth/login", { email: cleanEmail, password })
           if (r1?.data?.token) return r1.data.token
-        } catch (_) {}
+        } catch {}
         try {
           const r2 = await api.post("/Auth/login", { userName: cleanEmail, password })
           if (r2?.data?.token) return r2.data.token
-        } catch (_) {}
+        } catch {}
         return null
       }
 
@@ -118,22 +101,23 @@ export default function SignupBlock() {
       if (loginToken) {
         login(loginToken)
         toaster.success({ title: "Cuenta creada", description: "Sesión iniciada" })
-        navigate("/", { replace: true })
+        navigate(redirectTo, { replace: true }) // ← antes iba a "/"
         return
       }
 
       toaster.success({ title: "Cuenta creada", description: "Inicia sesión para continuar" })
-      navigate("/login", { replace: true, state: { from } })
+      navigate("/login", {
+        replace: true,
+        state: { from: { pathname: redirectTo } }, // guarda intención original
+      })
     } catch (err) {
       const status = err?.response?.status
       const apiMsg = err?.response?.data?.message
-
       let description = apiMsg || "No se pudo crear la cuenta. Intenta más tarde."
       if (err?.code === "ERR_NETWORK") description = "No pudimos contactar el backend."
       else if (status === 409) description = apiMsg || "El correo ya está registrado."
       else if (status === 400) description = apiMsg || "Datos inválidos. Revisa e inténtalo de nuevo."
       else if (status >= 500) description = apiMsg || "Problema en el servidor. Intenta más tarde."
-
       setFormError(description)
       toaster.error({ title: "Error al registrarse", description })
     } finally {
@@ -315,7 +299,7 @@ export default function SignupBlock() {
         </Container>
       </Box>
 
-      {/* Panel derecho con la imagen fotorealista */}
+      {/* Panel derecho con imagen */}
       <RightPanel imageSrc={signupImage} gradient={false} overlayColor="blackAlpha.150" h="full" />
     </Flex>
   )
