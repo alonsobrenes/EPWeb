@@ -61,6 +61,10 @@ export default function ReviewSacksReadOnly() {
     estructuraRealidad: "", estructuraExpresion: "",
   })
 
+  // === NUEVO: Estado para Opinión IA (solo lectura) ===
+  const [aiText, setAiText] = useState("")
+  const [loadingAi, setLoadingAi] = useState(true)
+
   useEffect(() => {
     let alive = true
     async function load() {
@@ -125,6 +129,18 @@ export default function ReviewSacksReadOnly() {
           if (qid && disp) m[qid] = disp
         }
         setAnswersByQ(m)
+
+        // 4) === NUEVO: cargar Opinión IA (no bloquea la pantalla) ===
+        try {
+          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+          if (!alive) return
+          const text = ai?.opinionText || ai?.text || ""
+          setAiText(text)
+        } catch {
+          // silencioso: si no hay opinión, dejamos textarea vacío
+        } finally {
+          if (alive) setLoadingAi(false)
+        }
       } catch (e) {
         toaster.error({ title: "No se pudo cargar la vista", description: e?.message || "Error" })
       } finally {
@@ -199,7 +215,7 @@ export default function ReviewSacksReadOnly() {
                   </>
                 ) : null}
 
-                {/* === NUEVO: Notas interpretativas por categoría === */}
+                {/* === Notas interpretativas por categoría (solo lectura) === */}
                 {scoreInfo?.notes && (
                   <Box mt="3" p="2" bg="gray.50" borderWidth="1px" borderColor="gray.200" rounded="md">
                     <Text fontSize="sm"><b>Notas interpretativas:</b> {scoreInfo.notes}</Text>
@@ -211,7 +227,7 @@ export default function ReviewSacksReadOnly() {
         </VStack>
       </Card.Root>
 
-      {/* === NUEVO: Sumario interpretativo final === */}
+      {/* === Sumario interpretativo final === */}
       {(sum.areasConflicto || sum.interrelacion || sum.estructura ||
         sum.estructuraImpulsos || sum.estructuraAjuste || sum.estructuraMadurez ||
         sum.estructuraRealidad || sum.estructuraExpresion) && (
@@ -234,6 +250,21 @@ export default function ReviewSacksReadOnly() {
           </VStack>
         </Card.Root>
       )}
+
+      {/* === NUEVO: Opinión del asistente de IA (solo lectura) === */}
+      <Card.Root p="4">
+        <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+        <Box>
+          <textarea
+            style={{ width: '100%', minHeight: '160px' }}
+            placeholder="Síntesis generada por IA (solo lectura)"
+            value={aiText}
+            onChange={() => {}}
+            disabled={loadingAi}
+            readOnly
+          />
+        </Box>
+      </Card.Root>
     </VStack>
   )
 }
