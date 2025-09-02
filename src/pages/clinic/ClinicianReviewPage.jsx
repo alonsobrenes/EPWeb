@@ -98,6 +98,11 @@ export default function ClinicianReviewPage() {
   const [saving, setSaving] = useState(false)
   const [scales, setScales] = useState([])
 
+  // Opinión de IA
+  const [aiText, setAiText] = useState("")
+  const [loadingAi, setLoadingAi] = useState(true)
+  const [savingAi, setSavingAi] = useState(false)
+
   // shape: { [scaleId]: { value: "0"|"1"|"2"|"X"|null, notes: string } }
   const [valsByScaleId, setValsByScaleId] = useState({})
 
@@ -158,6 +163,14 @@ export default function ClinicianReviewPage() {
           }
         }
         setValsByScaleId(nextVals)
+
+        // Opinión de IA (no bloquea la carga)
+        try {
+          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+          const text = ai?.opinionText || ai?.text || ""
+          setAiText(text)
+        } catch {}
+
 
         if (rev) {
           setSum({
@@ -236,6 +249,18 @@ export default function ClinicianReviewPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function saveAiOpinion() {
+    try {
+      const effPid = meta?.patientId || meta?.patient_id || new URLSearchParams(location.search).get("patientId") || location.state?.patientId || null
+      if (!effPid) { toaster.error({ title: "Falta paciente", description: "No se puede guardar sin patientId" }); return }
+      setSavingAi(true)
+      await ClinicianApi.upsertAttemptAiOpinion(attemptId, { patientId: effPid, text: aiText })
+      toaster.success({ title: "Opinión de IA guardada" })
+    } catch (e) {
+      toaster.error({ title: "No se pudo guardar opinión", description: e?.message || "Error" })
+    } finally { setSavingAi(false) }
   }
 
   async function finalizeSimple() {
@@ -371,6 +396,20 @@ export default function ClinicianReviewPage() {
           </VStack>
         </Card.Root>
       )}
+      <Card.Root p="4">
+        <Heading size="sm" mb="3">Opinión del asistente de IAA</Heading>
+        <Textarea
+          minH="160px"
+          placeholder="Síntesis generada por IA (editable)"
+          value={aiText}
+          onChange={(e) => setAiText(e.target.value)}
+          disabled={loadingAi}
+        />
+        <HStack justify="end" mt="12px">
+          <Button onClick={saveAiOpinion} isLoading={savingAi} disabled={loadingAi}>Guardar</Button>
+        </HStack>
+      </Card.Root>
+
     </VStack>
   )
 }

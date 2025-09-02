@@ -85,6 +85,52 @@ async createAttempt({ testId, patientId = null, answers = [], startedAtUtc = nul
     await client.post(`/clinician/attempts/${attemptId}/finalize`)
   },
 
+  // === AI Opinion per Attempt ===
+async getAttemptAiOpinion(attemptId) {
+  const { data } = await client.get(`/clinician/attempts/${attemptId}/ai-opinion`)
+  // backend devuelve {} si no hay registro
+  return data || {}
+},
+
+/**
+ * Upsert AI opinion for an attempt.
+ * Acepta payload flexible; normalizamos a lo que pide el backend:
+ * { patientId?, opinionText? | text?, opinionJson?, modelVersion?, promptVersion?, inputHash?, riskLevel? }
+ * Si no viene patientId, lo obtenemos con getAttemptMeta(attemptId).
+ */
+async upsertAttemptAiOpinion(attemptId, payload = {}) {
+  // Normalización de claves
+  const body = {
+    patientId: payload.patientId ?? payload.PatientId ?? null,
+    opinionText: payload.opinionText ?? payload.text ?? null,
+    opinionJson: payload.opinionJson ?? null,
+    modelVersion: payload.modelVersion ?? null,
+    promptVersion: payload.promptVersion ?? null,
+    inputHash: payload.inputHash ?? null,
+    riskLevel: payload.riskLevel ?? null,
+  }
+
+  // Asegurar patientId (requerido por el backend)
+  if (!body.patientId) {
+    try {
+      const meta = await this.getAttemptMeta(attemptId)
+      body.patientId = meta?.patientId ?? meta?.patient_id ?? null
+    } catch {}
+  }
+  if (!body.patientId) {
+    throw new Error('patientId is required to save AI opinion')
+  }
+
+  await client.put(`/clinician/attempts/${attemptId}/ai-opinion`, body)
+ },
+ // src/api/clinicianApi.js
+generateAttemptAiOpinion(attemptId, body = {}) {
+  console.log(body)
+  return client.post(`/clinician/attempts/${attemptId}/ai-opinion/auto`, body).then(r => r.data)
+}
+
+
+
 }
 
 export default ClinicianApi

@@ -267,6 +267,7 @@ async function downloadRow(row) {
     if (isSacks || scoring === 'clinician') {
       // ---- SACKS: necesitamos grupos/ítems para el orden y los títulos ----
       const scWrap = await ClinicianApi.getScalesWithItems(testId) // {scales:[{name,code,items:[{id,code,text}]}]}
+      console.log(scWrap)
       const scales = scWrap?.scales || []
       const sections = scales.map(sc => ({
         code: sc.code || '',

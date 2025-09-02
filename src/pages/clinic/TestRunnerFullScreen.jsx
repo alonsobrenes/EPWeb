@@ -86,6 +86,119 @@ function storageKey({ testId, patientId, assignmentId }) {
   return `ep:test:${testId}:patient:${patientId}${assignmentId ? `:assign:${assignmentId}` : ''}`
 }
 
+// =======================
+// Local scoring fallback
+// =======================
+// Usa sólo preguntas y respuestas locales, y si el server trae escalas en 0, usamos sus códigos/nombres
+// y calculamos los puntajes por tríadas (IPA: 45 preguntas -> 15 escalas).
+function computeResultsFallback({ questions, answers, serverScales = null }) {
+  const qByCodeNum = new Map()
+  const qById = new Map(questions.map(q => [q.id, q]))
+  for (const q of questions) {
+    const m = (q.code ? String(q.code) : '').match(/(\d+)/)
+    if (m) qByCodeNum.set(Number(m[1]), q)
+  }
+  const isIPA = (questions.length === 45)
+  // Base de escalas: si el server nos dio códigos los usamos, si no inventamos 15 por orden
+  let scaleSkeleton = []
+  if (Array.isArray(serverScales) && serverScales.length) {
+    scaleSkeleton = serverScales.map(s => ({ code: s.code || s.scaleCode, name: s.name || s.scaleName }))
+  } else if (isIPA) {
+    scaleSkeleton = [
+      { code: 'culpabilidad', name: 'Culpabilidad' },
+      { code: 'etiquetas_globales', name: 'Etiquetas globales' },
+      { code: 'falacia_de_cambio', name: 'Falacia de cambio' },
+      { code: 'falacia_de_control', name: 'Falacia de control' },
+      { code: 'falacia_de_justicia', name: 'Falacia de justicia' },
+      { code: 'falacia_de_razon', name: 'Falacia de razón' },
+      { code: 'falacia_de_recompensa_divina', name: 'Falacia de recompensa divina' },
+      { code: 'filtraje', name: 'Filtraje' },
+      { code: 'interpretacion_del_pensamiento', name: 'Interpretación del pensamiento' },
+      { code: 'los_deberia', name: 'Los “debería”' },
+      { code: 'pensamiento_polarizado', name: 'Pensamiento polarizado' },
+      { code: 'personalizacion', name: 'Personalización' },
+      { code: 'razonamiento_emocional', name: 'Razonamiento emocional' },
+      { code: 'sobregeneralizacion', name: 'Sobregeneralización' },
+      { code: 'vision_catastrofica', name: 'Visión catastrófica' },
+    ]
+  }
+
+  function coerceNum(x) {
+    const n = Number(x)
+    return Number.isFinite(n) ? n : null
+  }
+  function getMinMax(q) {
+    if (q && Array.isArray(q.options) && q.options.length) {
+      const nums = q.options.map(o => coerceNum(o?.value)).filter(v => v != null)
+      if (nums.length) return { min: Math.min(...nums), max: Math.max(...nums) }
+    }
+    return { min: 1, max: 4 }
+  }
+  function valueForQuestion(q, rawVal) {
+    // rawVal en este runner es: string | string[] | undefined
+    if (Array.isArray(rawVal) && rawVal.length) {
+      const nums = rawVal.map(coerceNum).filter(v => v != null)
+      if (nums.length) return nums.reduce((a,b)=>a+b,0)
+    }
+    const n = coerceNum(rawVal)
+    if (n != null) return n
+    // si llegó como label, intenta match por label
+    if (q && q.options && typeof rawVal === 'string') {
+      const byLabel = q.options.find(o => String(o.label) === rawVal)
+      const n2 = coerceNum(byLabel?.value)
+      if (n2 != null) return n2
+    }
+    return null
+  }
+
+  const outScales = []
+  let totalRaw = 0, totalMin = 0, totalMax = 0
+
+  for (let i = 0; i < scaleSkeleton.length; i++) {
+    const s = scaleSkeleton[i]
+    let scaleRaw = 0, scaleMin = 0, scaleMax = 0
+
+    // ítems por tríada (IPA) si aplica
+    let itemCodes = []
+    if (isIPA) {
+      itemCodes = [i + 1, i + 16, i + 31] // 1..15 / 16..30 / 31..45
+    }
+
+    for (const num of itemCodes) {
+      const q = qByCodeNum.get(num)
+      if (!q) continue
+      const { min, max } = getMinMax(q)
+      const ans = answers[q.id]
+      const val = valueForQuestion(q, ans)
+      const scored = (val != null) ? val : min
+      scaleRaw += scored
+      scaleMin += min
+      scaleMax += max
+    }
+
+    totalRaw += scaleRaw
+    totalMin += scaleMin
+    totalMax += scaleMax
+
+    const percent = (scaleMax > scaleMin) ? ((scaleRaw - scaleMin) / (scaleMax - scaleMin)) * 100 : null
+    outScales.push({
+      scaleCode: s.code,
+      scaleName: s.name,
+      raw: Number(scaleRaw.toFixed(4)),
+      min: Number(scaleMin.toFixed(4)),
+      max: Number(scaleMax.toFixed(4)),
+      percent: (percent == null) ? null : Number(percent.toFixed(4)),
+    })
+  }
+
+  const totalPercent = (totalMax > totalMin) ? ((totalRaw - totalMin) / (totalMax - totalMin)) * 100 : null
+  return {
+    totalRaw: Number(totalRaw.toFixed(4)),
+    totalPercent: (totalPercent == null) ? null : Number(totalPercent.toFixed(4)),
+    scales: outScales,
+  }
+}
+
 export default function TestRunnerFullScreen({
   open,
   onClose,
@@ -108,6 +221,12 @@ export default function TestRunnerFullScreen({
   const startedAtRef = useRef(null)
   const resolvedTestIdRef = useRef(testId || null)
   const resolvedPatientIdRef = useRef(patientId || null)
+
+  // IA Opinion (auto)
+  const [aiText, setAiText] = useState('')
+  const [loadingAi, setLoadingAi] = useState(false)
+  const [savingAi, setSavingAi] = useState(false)
+  const [attemptIdAuto, setAttemptIdAuto] = useState(null)
 
   // scoring_mode (si viene del prop o backend)
   const [scoringMode, setScoringMode] = useState(() => (test?.scoring_mode ?? test?.scoringMode ?? null))
@@ -358,7 +477,18 @@ function persist(toast = false) {
 
       // 3) Rama automática (mostrar Resultados)
       const data = await TestsApi.submitRun(payload)
-      setResult(data)
+
+      // si el server trae escalas inválidas (0/0), calcula en cliente
+      const invalid = !data || !Array.isArray(data.scales) || data.scales.length === 0 ||
+                      data.scales.every(s => Number(s.min) === 0 && Number(s.max) === 0)
+
+      if (invalid) {
+        console.log('[runner] submitRun devolvió escalas inválidas; calculando fallback…')
+        const fk = computeResultsFallback({ questions, answers, serverScales: data?.scales || null })
+        setResult(fk)
+      } else {
+        setResult(data)
+      }
       toaster.success({ title: 'Resultados calculados' })
 
       // (opcional) loggear intento auto y persistir respuestas para historial/PDF
@@ -368,6 +498,7 @@ function persist(toast = false) {
           patientId: (resolvedPatientIdRef?.current || patientId) ?? null,
           startedAtUtc: startedAtRef.current || new Date().toISOString(),
         })
+        setAttemptIdAuto(attemptId)
         const norm = built.map(a => ({
           questionId: a.questionId,
           text: a.text ?? null,
@@ -375,6 +506,37 @@ function persist(toast = false) {
           valuesJson: Array.isArray(a.values) && a.values.length ? JSON.stringify(a.values.map(String)) : null,
         }))
         await ClinicianApi.saveAttemptAnswers(attemptId, norm)
+        // === Generar (o recuperar) Opinión IA ===
+        try {
+          setAttemptIdAuto(attemptId)
+          setLoadingAi(true)
+          if (ClinicianApi.generateAttemptAiOpinion) {
+            const gen = await ClinicianApi.generateAttemptAiOpinion(attemptId, {
+              model: 'gpt-4o-mini',
+              promptVersion: 'v1.0'
+            })
+            const text = gen?.opinionText || gen?.text || ''
+            if (text) setAiText(text)
+          } else {
+            // fallback: intentar leer la existente
+            const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+            const text = ai?.opinionText || ai?.text || ''
+            if (text) setAiText(text)
+          }
+        } catch (e) {
+          console.log('No se pudo generar/leer opinión IA:', e)
+        } finally {
+          setLoadingAi(false)
+        }
+
+        // cargar opinión existente (si la hubiera)
+        try {
+          setLoadingAi(true)
+          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+          const text = ai?.opinionText || ai?.text || ''
+          setAiText(text)
+        } catch {}
+        finally { setLoadingAi(false) }
       } catch (e) {
         console.log('No se pudo loggear el intento auto:', e)
       }
@@ -445,6 +607,21 @@ function persist(toast = false) {
     )
   }
 
+  async function saveAiOpinion() {
+    try {
+      if (!attemptIdAuto) { toaster.error({ title: 'Aún no hay intento registrado' }); return }
+      const pid = (resolvedPatientIdRef?.current || patientId) ?? null
+      if (!pid) { toaster.error({ title: 'Falta paciente', description: 'No se puede guardar sin patientId' }); return }
+      setSavingAi(true)
+      await ClinicianApi.upsertAttemptAiOpinion(attemptIdAuto, { patientId: pid, text: aiText })
+      toaster.success({ title: 'Opinión de IA guardada' })
+    } catch (e) {
+      toaster.error({ title: 'No se pudo guardar opinión', description: getErrorMessage(e) })
+    } finally {
+      setSavingAi(false)
+    }
+  }
+
   function ResultsView() {
     const totalRaw = result?.totalRaw ?? null
     const totalPercent = result?.totalPercent ?? null
@@ -480,7 +657,7 @@ function persist(toast = false) {
                 </Table.Row>
               ) : (
                 scales.map(s => (
-                  <Table.Row key={s.scaleId || s.code}>
+                  <Table.Row key={s.scaleId || s.code || s.scaleCode}>
                     <Table.Cell><Text><b>{s.code || s.scaleCode}</b> — {s.name || s.scaleName}</Text></Table.Cell>
                     <Table.Cell>{Number(s.raw).toFixed(2)}</Table.Cell>
                     <Table.Cell>{Number(s.min).toFixed(2)} / {Number(s.max).toFixed(2)}</Table.Cell>
@@ -491,6 +668,42 @@ function persist(toast = false) {
             </Table.Body>
           </Table.Root>
         </Box>
+
+        {/* Opinión IA (editable) */}
+        <Box mt="6" borderWidth="1px" rounded="md" p="3" position="relative">
+          <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+          {loadingAi && (
+            <HStack position="absolute" inset="0" bg="whiteAlpha.700" justify="center" align="center" zIndex="1">
+              <Spinner />
+              <Text fontSize="sm" ml="2">Generando opinión…</Text>
+            </HStack>
+          )}
+          <textarea
+            style={{
+              width: '100%',
+              minHeight: '260px',
+              maxHeight: '60vh',
+              resize: 'vertical',
+              padding: '12px',
+              boxSizing: 'border-box',
+              border: '1px solid rgba(0,0,0,0.2)',
+              borderRadius: '8px',
+              fontSize: '14px',
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              overflowY: 'auto'
+            }}
+            placeholder="Síntesis generada por IA (solo lectura)"
+            value={aiText}
+            onChange={(e) => setAiText(e.target.value)}
+            disabled={loadingAi}
+            readOnly
+          />
+          <HStack justify="flex-end" mt="12px" display="none">
+            <Button onClick={saveAiOpinion} isLoading={savingAi} disabled={loadingAi || !attemptIdAuto}>Guardar</Button>
+          </HStack>
+        </Box>
+
         <HStack justify="flex-end" mt="4">
           <Button onClick={onClose}>Cerrar</Button>
         </HStack>
@@ -503,7 +716,7 @@ function persist(toast = false) {
   const q = questions[index]
 
   return (
-    <Box position="fixed" inset="0" bg="white" zIndex="modal">
+    <Box position="fixed" inset="0" bg="white" zIndex="modal" h="100vh" overflowY="auto" style={{ WebkitOverflowScrolling: "touch" }}>
       <Box position="sticky" top="0" bg="white" zIndex="1" borderBottomWidth="1px" px="4" py="3">
         <HStack justify="space-between" align="center">
           <HStack gap="3" align="center" overflow="hidden">
@@ -530,7 +743,7 @@ function persist(toast = false) {
         </HStack>
       </Box>
 
-      <Box px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
+      <Box px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }} pb={{ base: 24, md: 12 }}>
         {loading ? (
           <Box h="60vh" display="grid" placeItems="center">
             <HStack color="fg.muted"><Spinner /><Text>Cargando preguntas…</Text></HStack>

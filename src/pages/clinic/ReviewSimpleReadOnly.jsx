@@ -1,4 +1,6 @@
+// ===============================
 // src/pages/clinic/ReviewSimpleReadOnly.jsx
+// ===============================
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import {
@@ -67,6 +69,170 @@ function toDisplayAnswer(a) {
   return v == null ? "" : String(v)
 }
 
+
+
+// ===== Fallback local para calcular resultados por escalas =====
+// Objetivo: restaurar el comportamiento previo y hacerlo más robusto sin romper nada.
+// - Usa s.items si está presente (forma antigua que funcionaba)
+// - Acepta variantes: scaleItems, itemIds/itemsIds, questionIds/question_ids
+// - Si no hay items y es IPA (45 q / 15 escalas), aplica triadas (1,16,31…)
+// - Si no hay metadatos por ítem, asume Likert 1–4 para min/max
+
+// ===== Fallback local para calcular resultados por escalas (robusto y retrocompatible) =====
+// ===== Fallback EXÁCTO para calcular resultados por escalas =====
+// Usar *tal cual* en lugar de la versión actual.
+async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
+  // 1) Traer escalas con items (preguntas por escala)
+  const sw = await ClinicianApi.getScalesWithItems(effectiveTestId)
+  const scales = Array.isArray(sw?.scales) ? sw.scales : []
+  const qById = new Map(questions.map(q => [q.id, q]))
+
+  // Helpers numéricos seguros
+  const toNum = (v) => {
+    if (v == null) return null
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    const s = String(v).trim()
+    if (/^-?\d+(?:[.,]\d+)?$/.test(s)) return Number(s.replace(',', '.'))
+    return null
+  }
+
+  // Min/Max por pregunta a partir de opciones (si no hay, se infiere por tipo)
+  function getQMinMax(q) {
+    const opts = Array.isArray(q.options) ? q.options : []
+    const nums = opts.map(o => toNum(o.value)).filter(n => n != null)
+
+    if (q.type === 'multi') {
+      // multi: min 0, max = suma de valores positivos únicos
+      const pos = nums.filter(n => n > 0)
+      const max = pos.reduce((a, b) => a + b, 0)
+      return { min: 0, max: max || 0 }
+    }
+
+    if (nums.length > 0) {
+      return { min: Math.min(...nums), max: Math.max(...nums) }
+    }
+
+    // Likert inferido por rawType (si quedó algo en rawType con rango)
+    const spec = parseLikertSpec(q.rawType || '')
+    if (spec) return { min: spec.start, max: spec.end }
+
+    // Sí/No sin opciones
+    const t = (q.rawType || '').toLowerCase()
+    if (t === 'yesno' || t === 'yes-no' || t === 'yes_no' || t === 'yn' || t === 'bool' || t === 'boolean') {
+      return { min: 0, max: 1 }
+    }
+
+    // Triadas sin valores: asumimos 3 categorías equiespaciadas 1..3
+    if ((q.type === 'single' || q.type === 'multi') && (opts.length === 3 || t.includes('triad'))) {
+      return { min: 1, max: 3 }
+    }
+
+    // Último recurso: 1..4 (no debería ocurrir si ya construimos opciones arriba)
+    return { min: 1, max: 4 }
+  }
+
+  // Valor numérico de la respuesta de una pregunta
+  function getAnswerNumeric(q) {
+    const ans = answersByQ[q.id] || {}
+
+    // SINGLE
+    if (q.type === 'single') {
+      // intento directo con value
+      const nv = toNum(ans.value)
+      if (nv != null) return nv
+
+      // mapear por label → value
+      if (ans.text && Array.isArray(q.options)) {
+        const opt = q.options.find(o => String(o.label) === String(ans.text))
+        const nv2 = toNum(opt?.value)
+        if (nv2 != null) return nv2
+      }
+
+      // mapear por value string → opción
+      if (ans.value != null && Array.isArray(q.options)) {
+        const opt = q.options.find(o => String(o.value) === String(ans.value))
+        const nv3 = toNum(opt?.value)
+        if (nv3 != null) return nv3
+      }
+
+      // sin dato: devolver null (se contará como min)
+      return null
+    }
+
+    // MULTI → suma de valores seleccionados
+    if (q.type === 'multi') {
+      // vector ya normalizado
+      let values = Array.isArray(ans.values) ? ans.values.slice() : []
+      // o JSON crudo
+      if (!values.length && typeof ans.answerValuesJson === 'string') {
+        try { const tmp = JSON.parse(ans.answerValuesJson); if (Array.isArray(tmp)) values = tmp } catch {}
+      }
+
+      if (!values.length) return 0
+      const set = new Set(values.map(v => String(v))) // para deduplicar
+
+      let sum = 0
+      for (const opt of (q.options || [])) {
+        const pick = set.has(String(opt.value)) || set.has(String(opt.id)) || set.has(String(opt.label))
+        if (pick) {
+          const nv = toNum(opt.value)
+          if (nv != null) sum += nv
+        }
+      }
+      return sum
+    }
+
+    // OPEN → sin puntaje
+    return 0
+  }
+
+  // 2) Recorrer escalas y acumular con min/max exactos por ítem
+  const outScales = []
+  let totalRaw = 0, totalMin = 0, totalMax = 0
+
+  for (const s of scales) {
+    const items = Array.isArray(s.items) ? s.items : []
+    let raw = 0, min = 0, max = 0
+
+    for (const it of items) {
+      const q = qById.get(it.id)
+      if (!q) continue
+
+      const mm = getQMinMax(q)
+      const val = getAnswerNumeric(q)
+
+      // si no hay respuesta, tomar el mínimo de la pregunta
+      const use = (val == null ? mm.min : val)
+
+      raw += use
+      min += mm.min
+      max += mm.max
+    }
+
+    totalRaw += raw
+    totalMin += min
+    totalMax += max
+
+    const percent = (max > min) ? ((raw - min) / (max - min)) * 100 : null
+    outScales.push({
+      scaleId: s.id,
+      scaleCode: s.code,
+      scaleName: s.name,
+      raw: Number(raw.toFixed(4)),
+      min: Number(min.toFixed(4)),
+      max: Number(max.toFixed(4)),
+      percent: percent == null ? null : Number(percent.toFixed(4)),
+    })
+  }
+
+  const totalPercent = (totalMax > totalMin) ? ((totalRaw - totalMin) / (totalMax - totalMin)) * 100 : null
+  return {
+    totalRaw: Number(totalRaw.toFixed(4)),
+    totalPercent: totalPercent == null ? null : Number(totalPercent.toFixed(4)),
+    scales: outScales,
+  }
+}
+
 export default function ReviewSimpleReadOnly() {
   const { attemptId } = useParams()
   const location = useLocation()
@@ -82,7 +248,12 @@ export default function ReviewSimpleReadOnly() {
   const [answersByQ, setAnswersByQ] = useState({})
   const [result, setResult] = useState(null)
 
-  // Borde vertical utilitario (aplícalo a cada header/celda que NO sea la primera)
+  // Opinión de IA
+  const [aiText, setAiText] = useState("")
+  const [loadingAi, setLoadingAi] = useState(true)
+  const [savingAi, setSavingAi] = useState(false)
+
+  // Borde vertical utilitario
   const colBorder = { borderLeftWidth: "1px", borderLeftColor: "blackAlpha.200" }
 
   const optionColumns = useMemo(() => {
@@ -184,27 +355,62 @@ export default function ReviewSimpleReadOnly() {
         }
         setAnswersByQ(map)
 
+        // Cargar opinión de IA (no bloquea)
+        try {
+          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+          const text = ai?.opinionText || ai?.text || ""
+          setAiText(text)
+        } catch {}
+        finally { setLoadingAi(false) }
+
+        // ==== RECÁLCULO (server) con tolerancia y Fallback local ====
         try {
           const built = norm.map(q => {
             const r = map[q.id] || {}
-            if (q.type === "open")   return { questionId: q.id, text: (r.text ?? null), value: null, values: null }
-            if (q.type === "single") return { questionId: q.id, text: null, value: r.value != null ? String(r.value) : null, values: null }
-            const arr = Array.isArray(r.values) ? r.values.map(String) : []
-            return { questionId: q.id, text: null, value: null, values: arr.length ? arr : null }
+            if (q.type === "open")   return { questionId: q.id, answerText: (r.text ?? null), value: null, values: null }
+            if (q.type === "single") {
+              let v = r.value
+              if (v != null && typeof v === 'string' && /^\d+(?:\.\d+)?$/.test(v)) v = Number(v)
+              return { questionId: q.id, answerValue: v ?? null, value: v ?? null, values: null }
+            }
+            const arr = Array.isArray(r.values) ? r.values.map(v => (typeof v === 'string' && /^\d+(?:\.\d+)?$/.test(v) ? Number(v) : v)) : []
+            return { questionId: q.id, answerValues: arr.length ? arr : null, value: null, values: arr.length ? arr : null }
           })
+
           const nowIso = new Date().toISOString()
+          const effPid = m?.patientId || qs.get("patientId") || location.state?.patientId || null
           const res = await TestsApi.submitRun({
             testId: effectiveTestId,
-            patientId: m?.patientId ?? null,
+            patientId: effPid,
             startedAtUtc: m?.startedAtUtc ?? nowIso,
             finishedAtUtc: m?.updatedAtUtc ?? nowIso,
             answers: built,
           })
           if (!alive) return
-          setResult(res || null)
+          // Logs para depurar el submit
+          console.log('[submitRun] answers sample', built.slice(0,3))
+          console.log('[submitRun] server scales', Array.isArray(res?.scales) ? res.scales.map(s => ({code:s.code, min:s.min, max:s.max, raw:s.raw})) : res?.scales)
+
+          const invalid = !res || !Array.isArray(res.scales) || res.scales.length === 0 ||
+                          res.scales.every(s => Number(s.min) === 0 && Number(s.max) === 0)
+
+          if (invalid) {
+            console.log('[fallback] submitRun devolvió escalas inválidas; recalculando en cliente')
+            const fk = await computeResultsFallback(effectiveTestId, norm, map, res?.scales || null)
+            setResult(fk || null)
+          } else {
+            setResult(res || null)
+          }
         } catch (e) {
-          console.log("No se pudieron recalcular resultados para lectura:", e)
-          setResult(null)
+          console.log("No se pudieron recalcular resultados para lectura (usando Fallback local)", e)
+          try {
+            const fk = await computeResultsFallback(effectiveTestId, norm, map)
+            if (!alive) return
+            setResult(fk)
+          } catch (inner) {
+            console.warn("Fallback local también falló:", inner)
+            setResult(null)
+          }
         }
       } catch (e) {
         toaster.error({ title: "No se pudo cargar la vista", description: e?.message || "Error" })
@@ -265,9 +471,9 @@ export default function ReviewSimpleReadOnly() {
             <Table.Header>
               <Table.Row>
                 <Table.ColumnHeader minW="180px">Escala</Table.ColumnHeader>
-                <Table.ColumnHeader {...colBorder} minW="100px">Raw</Table.ColumnHeader>
-                <Table.ColumnHeader {...colBorder} minW="120px">Min / Max</Table.ColumnHeader>
-                <Table.ColumnHeader {...colBorder} minW="100px">% (0–100)</Table.ColumnHeader>
+                <Table.ColumnHeader minW="100px">Raw</Table.ColumnHeader>
+                <Table.ColumnHeader minW="120px">Min / Max</Table.ColumnHeader>
+                <Table.ColumnHeader minW="100px">% (0–100)</Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -281,9 +487,9 @@ export default function ReviewSimpleReadOnly() {
                 scales.map(s => (
                   <Table.Row key={s.scaleId || s.code}>
                     <Table.Cell><Text><b>{s.code || s.scaleCode}</b> — {s.name || s.scaleName}</Text></Table.Cell>
-                    <Table.Cell {...colBorder}>{Number(s.raw).toFixed(2)}</Table.Cell>
-                    <Table.Cell {...colBorder}>{Number(s.min).toFixed(2)} / {Number(s.max).toFixed(2)}</Table.Cell>
-                    <Table.Cell {...colBorder}>{(s.max > s.min && s.percent != null) ? `${Number(s.percent).toFixed(2)}%` : "—"}</Table.Cell>
+                    <Table.Cell>{Number(s.raw).toFixed(2)}</Table.Cell>
+                    <Table.Cell>{Number(s.min).toFixed(2)} / {Number(s.max).toFixed(2)}</Table.Cell>
+                    <Table.Cell>{(s.max > s.min && s.percent != null) ? `${Number(s.percent).toFixed(2)}%` : "—"}</Table.Cell>
                   </Table.Row>
                 ))
               )}
@@ -292,6 +498,20 @@ export default function ReviewSimpleReadOnly() {
         </Box>
       </Box>
     )
+  }
+
+  async function saveAiOpinion() {
+    try {
+      const pid = meta?.patientId || meta?.patient_id || new URLSearchParams(location.search).get("patientId") || null
+      if (!pid) { toaster.error({ title: "Falta paciente", description: "No se puede guardar sin patientId" }); return }
+      setSavingAi(true)
+      await ClinicianApi.upsertAttemptAiOpinion(attemptId, { patientId: pid, text: aiText })
+      toaster.success({ title: "Opinión de IA guardada" })
+    } catch (e) {
+      toaster.error({ title: "No se pudo guardar opinión", description: e?.message || "Error" })
+    } finally {
+      setSavingAi(false)
+    }
   }
 
   return (
@@ -316,10 +536,10 @@ export default function ReviewSimpleReadOnly() {
               <Table.Header>
                 <Table.Row>
                   <Table.ColumnHeader minW="90px">Código</Table.ColumnHeader>
-                  <Table.ColumnHeader {...colBorder} minW="520px">Opciones (elige una)</Table.ColumnHeader>
-                  <Table.ColumnHeader {...colBorder} textAlign="center" minW="70px"></Table.ColumnHeader>
-                  <Table.ColumnHeader {...colBorder} textAlign="center" minW="70px"></Table.ColumnHeader>
-                  <Table.ColumnHeader {...colBorder} textAlign="center" minW="70px"></Table.ColumnHeader>
+                  <Table.ColumnHeader minW="520px">Opciones (elige una)</Table.ColumnHeader>
+                  <Table.ColumnHeader textAlign="center" minW="70px"></Table.ColumnHeader>
+                  <Table.ColumnHeader textAlign="center" minW="70px"></Table.ColumnHeader>
+                  <Table.ColumnHeader textAlign="center" minW="70px"></Table.ColumnHeader>
                 </Table.Row>
               </Table.Header>
               <Table.Body>
@@ -331,7 +551,7 @@ export default function ReviewSimpleReadOnly() {
                   return (
                     <Table.Row key={q.id} verticalAlign="top">
                       <Table.Cell>{q.code}</Table.Cell>
-                      <Table.Cell {...colBorder}>
+                      <Table.Cell>
                         <VStack align="start" gap="1">
                           {opts.map((opt, idx) => (
                             <Text key={`${q.id}-line-${idx}`} fontSize="sm">{opt.label}</Text>
@@ -341,7 +561,7 @@ export default function ReviewSimpleReadOnly() {
                       {opts.map((opt, idx) => {
                         const selected = val != null && String(opt.value) === val
                         return (
-                          <Table.Cell {...colBorder} key={`${q.id}-mark-${idx}`} textAlign="center">
+                          <Table.Cell key={`${q.id}-mark-${idx}`} textAlign="center">
                             {selected ? "✓" : ""}
                           </Table.Cell>
                         )
@@ -358,13 +578,13 @@ export default function ReviewSimpleReadOnly() {
               <Table.Header>
                 <Table.Row>
                   <Table.ColumnHeader minW="80px">Código</Table.ColumnHeader>
-                  <Table.ColumnHeader {...colBorder} minW="360px">Pregunta</Table.ColumnHeader>
-                  {optionColumns.map((lbl, i) => (
-                    <Table.ColumnHeader {...colBorder} key={`col-${lbl}`} textAlign="center" minW="90px">
+                  <Table.ColumnHeader minW="360px">Pregunta</Table.ColumnHeader>
+                  {optionColumns.map((lbl) => (
+                    <Table.ColumnHeader key={`col-${lbl}`} textAlign="center" minW="90px">
                       {lbl}
                     </Table.ColumnHeader>
                   ))}
-                  {hasOpen && <Table.ColumnHeader {...colBorder} minW="240px">Respuesta (texto)</Table.ColumnHeader>}
+                  {hasOpen && <Table.ColumnHeader minW="240px">Respuesta (texto)</Table.ColumnHeader>}
                 </Table.Row>
               </Table.Header>
               <Table.Body>
@@ -374,13 +594,13 @@ export default function ReviewSimpleReadOnly() {
                   return (
                     <Table.Row key={q.id}>
                       <Table.Cell>{q.code}</Table.Cell>
-                      <Table.Cell {...colBorder}>{q.text}</Table.Cell>
+                      <Table.Cell>{q.text}</Table.Cell>
                       {optionColumns.map(lbl => (
-                        <Table.Cell {...colBorder} key={`cell-${q.id}-${lbl}`} textAlign="center">
+                        <Table.Cell key={`cell-${q.id}-${lbl}`} textAlign="center">
                           {(q.type === "single" || q.type === "multi") && isSelected(q, lbl) ? "✓" : ""}
                         </Table.Cell>
                       ))}
-                      {hasOpen && <Table.Cell {...colBorder}>{openText}</Table.Cell>}
+                      {hasOpen && <Table.Cell>{openText}</Table.Cell>}
                     </Table.Row>
                   )
                 })}
@@ -395,6 +615,31 @@ export default function ReviewSimpleReadOnly() {
           <ResultsBlock />
         </Card.Root>
       )}
+
+      <Card.Root p="4">
+        <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+        <Table.Root>
+          <Table.Body>
+            <Table.Row>
+              <Table.Cell>
+                <Box>
+                  <textarea
+                    style={{ width: '100%', minHeight: '160px' }}
+                    placeholder="Síntesis generada por IA (editable)"
+                    value={aiText}
+                    onChange={(e) => setAiText(e.target.value)}
+                    disabled={loadingAi}
+                    readOnly
+                  />
+                </Box>
+                {/* <HStack justify="end" mt="12px">
+                  <Button onClick={saveAiOpinion} isLoading={savingAi} disabled={loadingAi}>Guardar</Button>
+                </HStack> */}
+              </Table.Cell>
+            </Table.Row>
+          </Table.Body>
+        </Table.Root>
+      </Card.Root>
     </VStack>
   )
 }

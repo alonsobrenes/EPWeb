@@ -39,6 +39,7 @@ function ScoreRead({ value }) {
 }
 
 export default function ReviewSacksReadOnly() {
+  console.log("XXXXXX")
   const { attemptId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()

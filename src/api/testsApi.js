@@ -139,9 +139,43 @@ async getById(id) {
     // items: [{ disciplineId, categoryId?, subcategoryId? }, ...]
     await client.put(`/tests/${id}/taxonomy`, { items })
   },
-  async submitRun(payload) {
-    const { data } = await client.post('/test-runs/submit', payload)
-    return data // { runId, scales:[...], totalRaw, totalMax, totalPercent, ... }
+  async submitRun(dto) {
+    // dto esperado: { testId, patientId, startedAtUtc, finishedAtUtc, answers: [...] }
+
+    // NORMALIZAMOS TIPOS:
+    const body = {
+      testId: dto.testId,
+      patientId: dto.patientId,
+      startedAtUtc: dto.startedAtUtc,
+      finishedAtUtc: dto.finishedAtUtc,
+      answers: (dto.answers || []).map(a => {
+        // a puede venir como { questionId, value, values, answerText }
+        const out = { questionId: a.questionId };
+
+        // open text
+        if (a.answerText != null) out.answerText = String(a.answerText);
+
+        // single
+        if (a.value != null && a.values == null) {
+          // el endpoint espera string, no number
+          out.value = String(a.value);
+        }
+
+        // multi
+        if (Array.isArray(a.values)) {
+          out.values = a.values.map(v => String(v));
+        }
+
+        return out;
+      }),
+    };
+
+    const res = await client.post('/test-runs/submit', body, {
+      headers: { 'Content-Type': 'application/json' },
+      // Si tu acción espera un wrapper { dto: { ... } } (no suele hacer falta),
+      // cambia la línea anterior por: api.post('/api/test-runs/submit', { dto: body }, { ... })
+    });
+    return res.data;
   },
 }
 

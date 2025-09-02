@@ -1,5 +1,5 @@
-// src/app/review/ReviewSacksPage.jsx
-import { useEffect, useMemo, useState } from "react"
+// src/pages/clinic/ReviewSacksPage.jsx
+import { useEffect, useMemo, useState, useCallback, memo } from "react"
 import { useNavigate, useParams, useLocation } from "react-router-dom"
 import {
   Box, Card, HStack, VStack, Text, Heading, Button, Badge,
@@ -9,7 +9,8 @@ import ClinicianApi from "../../api/clinicianApi"
 import { toaster } from "../../components/ui/toaster"
 import { LuCheck, LuSave } from "react-icons/lu"
 
-function ScorePicker({ value, onChange }) {
+// == Picker de puntaje (memo) ==
+const ScorePicker = memo(function ScorePicker({ value, onChange }) {
   const valueStr = value == null ? "" : String(value)
   const CHOICES = [
     { val: "0", label: "0", activeBg: "blue.500" },
@@ -41,7 +42,68 @@ function ScorePicker({ value, onChange }) {
       })}
     </HStack>
   )
-}
+})
+
+// Constante estable para valores por defecto (evita crear {} por render)
+const EMPTY_VAL = Object.freeze({ value: null, notes: "" })
+
+// == Lista de ítems (memo) ==
+const ScaleItems = memo(function ScaleItems({ items, answersByQ }) {
+  if (!Array.isArray(items) || items.length === 0) return null
+  return (
+    <VStack align="stretch" gap="2">
+      {items.map((it) => {
+        const answer = answersByQ[it.id] || ""
+        return (
+          <Box key={it.id}>
+            <Text fontSize="sm">
+              <Text as="span" fontWeight="medium">{it.code}.</Text> {it.text}
+            </Text>
+            {answer && (
+              <Text mt="1" fontSize="sm" color="fg.muted">
+                <b>Respuesta:</b> {answer}
+              </Text>
+            )}
+          </Box>
+        )
+      })}
+    </VStack>
+  )
+})
+
+// == Tarjeta por escala (memo) ==
+const ScaleCard = memo(function ScaleCard({ s, v, onChange, answersByQ }) {
+  return (
+    <Box borderWidth="1px" rounded="md" p="3">
+      <HStack justify="space-between" align="start" wrap="wrap" gap="3">
+        <VStack align="start" gap="0.5">
+          <Text fontWeight="semibold">{s.name}</Text>
+          <Text color="fg.muted" fontSize="sm">{s.code}</Text>
+        </VStack>
+        <ScorePicker
+          value={v?.value ?? null}
+          onChange={(val) => onChange(s.id, { value: val })}
+        />
+      </HStack>
+
+      {Array.isArray(s.items) && s.items.length > 0 ? (
+        <>
+          <Separator my="3" />
+          <ScaleItems items={s.items} answersByQ={answersByQ} />
+        </>
+      ) : null}
+
+      <Box mt="3">
+        <Textarea
+          value={v?.notes || ""}
+          onChange={(e) => onChange(s.id, { notes: e.target.value })}
+          placeholder="Notas interpretativas para esta categoría…"
+          rows={2}
+        />
+      </Box>
+    </Box>
+  )
+})
 
 function toDisplayAnswer(a) {
   if (!a || typeof a !== "object") return ""
@@ -68,6 +130,8 @@ export default function ReviewSacksPage() {
   const [scales, setScales] = useState([])
   const [valsByScaleId, setValsByScaleId] = useState({})
   const [answersByQ, setAnswersByQ] = useState({})
+  const [aiText, setAiText] = useState("")
+  const [loadingAi, setLoadingAi] = useState(false)
   const [testName, setTestName] = useState(location.state?.testName || null)
   const testIdFromQS = new URLSearchParams(location.search).get("testId") || location.state?.testId || null
 
@@ -77,14 +141,15 @@ export default function ReviewSacksPage() {
     estructuraRealidad: "", estructuraExpresion: "",
   })
 
-  const setScaleValue = (scaleId, patch) => {
+  // Handler estable
+  const setScaleValue = useCallback((scaleId, patch) => {
     setValsByScaleId(prev => {
       const curr = prev[scaleId] || { value: null, notes: "" }
       const merged = { ...curr, ...patch }
       if (merged.value != null) merged.value = String(merged.value)
       return { ...prev, [scaleId]: merged }
     })
-  }
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -148,6 +213,15 @@ export default function ReviewSacksPage() {
           if (qid && disp) m[qid] = disp
         }
         setAnswersByQ(m)
+
+        // Cargar opinión IA (no bloquea)
+        try {
+          setLoadingAi(true)
+          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+          const text = ai?.opinionText || ai?.text || ""
+          setAiText(text)
+        } catch {}
+        finally { setLoadingAi(false) }
       } catch (e) {
         toaster.error({ title: "No se pudo cargar la hoja", description: e?.message || "Error" })
       } finally {
@@ -156,7 +230,7 @@ export default function ReviewSacksPage() {
     }
     load()
     return () => { mounted = false }
-  }, [attemptId, testIdFromQS])
+  }, [attemptId, testIdFromQS, testName])
 
   const totalEscalas = scales.length
   const completas = useMemo(() => {
@@ -168,6 +242,21 @@ export default function ReviewSacksPage() {
     }
     return n
   }, [scales, valsByScaleId])
+
+  async function generateAiOpinion() {
+    try {
+      setLoadingAi(true)
+      const gen = await ClinicianApi.generateAttemptAiOpinion(attemptId, { model: 'gpt-4o-mini', promptVersion: 'v1.0-sacks' })
+      const text = gen?.opinionText || gen?.text || ''
+      setAiText(text)
+      toaster.success({ title: 'Opinión IA generada y guardada' })
+    } catch (e) {
+      console.log('No se pudo generar opinión IA:', e)
+      toaster.error({ title: 'No se pudo generar opinión IA' })
+    } finally {
+      setLoadingAi(false)
+    }
+  }
 
   async function save(isFinal) {
     try {
@@ -211,49 +300,15 @@ export default function ReviewSacksPage() {
 
       <Card.Root p="4">
         <VStack align="stretch" gap="4">
-          {scales.map((s) => {
-            const v = valsByScaleId[s.id] || {}
-            return (
-              <Box key={s.id} borderWidth="1px" rounded="md" p="3">
-                <HStack justify="space-between" align="start" wrap="wrap" gap="3">
-                  <VStack align="start" gap="0.5">
-                    <Text fontWeight="semibold">{s.name}</Text>
-                    <Text color="fg.muted" fontSize="sm">{s.code}</Text>
-                  </VStack>
-                  <ScorePicker
-                    value={(valsByScaleId[s.id]?.value) ?? null}
-                    onChange={(val) => setScaleValue(s.id, { value: val })}
-                  />
-                </HStack>
-
-                {s.items?.length ? (
-                  <>
-                    <Separator my="3" />
-                    <VStack align="stretch" gap="2">
-                      {s.items.map((it) => {
-                        const answer = answersByQ[it.id] || ""
-                        return (
-                          <Box key={it.id}>
-                            <Text fontSize="sm"><Text as="span" fontWeight="medium">{it.code}.</Text> {it.text}</Text>
-                            {answer && <Text mt="1" fontSize="sm" color="fg.muted"><b>Respuesta:</b> {answer}</Text>}
-                          </Box>
-                        )
-                      })}
-                    </VStack>
-                  </>
-                ) : null}
-
-                <Box mt="3">
-                  <Textarea
-                    value={v.notes || ""}
-                    onChange={(e) => setScaleValue(s.id, { notes: e.target.value })}
-                    placeholder="Notas interpretativas para esta categoría…"
-                    rows={2}
-                  />
-                </Box>
-              </Box>
-            )
-          })}
+          {scales.map((s) => (
+            <ScaleCard
+              key={s.id}
+              s={s}
+              v={valsByScaleId[s.id] || EMPTY_VAL}
+              onChange={setScaleValue}
+              answersByQ={answersByQ}
+            />
+          ))}
         </VStack>
       </Card.Root>
 
@@ -280,6 +335,40 @@ export default function ReviewSacksPage() {
             value={sum.estructuraExpresion} onChange={(e) => setSum(s => ({ ...s, estructuraExpresion: e.target.value }))} />
         </VStack>
       </Card.Root>
+
+      <Card.Root p="4">
+        <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+        <Box position="relative">
+          {loadingAi && (
+            <HStack position="absolute" inset="0" bg="whiteAlpha.700" justify="center" align="center" zIndex="1">
+              <Spinner /><Text fontSize="sm" ml="2">Generando opinión…</Text>
+            </HStack>
+          )}
+          <Textarea
+            placeholder="Síntesis generada por IA (solo lectura)"
+            value={aiText}
+            readOnly
+            rows={6}
+            style={{
+              minHeight: '220px',
+              maxHeight: '60vh',
+              resize: 'vertical',
+              padding: '12px',
+              boxSizing: 'border-box',
+              border: '1px solid rgba(0,0,0,0.2)',
+              borderRadius: '8px',
+              fontSize: '14px',
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              overflowY: 'auto'
+            }}
+          />
+          <HStack justify="flex-end" mt="12px">
+            <Button onClick={generateAiOpinion} isLoading={loadingAi}>Obtener opinión IA</Button>
+          </HStack>
+        </Box>
+      </Card.Root>
+
     </VStack>
   )
 }
