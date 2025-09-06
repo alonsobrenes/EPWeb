@@ -237,7 +237,7 @@ export default function ReviewSimpleReadOnly() {
   const { attemptId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-
+console.log("XXXX")
   const qs = new URLSearchParams(location.search)
   const testIdQS = qs.get("testId") || location.state?.testId || null
   const testName = location.state?.testName || null

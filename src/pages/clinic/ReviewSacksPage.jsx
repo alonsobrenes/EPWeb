@@ -7,6 +7,8 @@ import {
 } from "@chakra-ui/react"
 import ClinicianApi from "../../api/clinicianApi"
 import { toaster } from "../../components/ui/toaster"
+import { useBillingStatus, pickEntitlement } from "../../hooks/useBilling"
+
 import { LuCheck, LuSave } from "react-icons/lu"
 
 // == Picker de puntaje (memo) ==
@@ -46,6 +48,18 @@ const ScorePicker = memo(function ScorePicker({ value, onChange }) {
 
 // Constante estable para valores por defecto (evita crear {} por render)
 const EMPTY_VAL = Object.freeze({ value: null, notes: "" })
+
+// Banner liviano sin Chakra Alert (compatible con tu setup)
+function Banner({ kind = 'warning', children, mb = '12px' }) {
+  const bg = kind === 'error' ? 'red.50' : 'yellow.50'
+  const border = kind === 'error' ? 'red.200' : 'yellow.200'
+  const color = kind === 'error' ? 'red.800' : 'yellow.800'
+  return (
+    <Box bg={bg} borderWidth="1px" borderColor={border} color={color} rounded="md" p="2" mb={mb}>
+      <Text fontSize="sm">{children}</Text>
+    </Box>
+  )
+}
 
 // == Lista de ítems (memo) ==
 const ScaleItems = memo(function ScaleItems({ items, answersByQ }) {
@@ -125,6 +139,19 @@ export default function ReviewSacksPage() {
   const location = useLocation()
   const navigate = useNavigate()
 
+  // Billing (solo lectura para UI)
+  const { data: billing, refresh: refreshBilling } = useBillingStatus()
+
+  // Opinión IA
+  const aiEnt = pickEntitlement(billing, "ai.opinion.monthly")
+  const aiDisabled  = aiEnt.limit !== null && aiEnt.remaining <= 0
+  const aiNearLimit = aiEnt.limit !== null && aiEnt.remaining > 0
+                      && aiEnt.remaining <= Math.ceil((aiEnt.limit || 1) * 0.1)
+  // SACKS (finalización)
+  const sacksEnt = pickEntitlement(billing, "sacks.monthly")
+  const sacksDisabled  = sacksEnt.limit !== null && sacksEnt.remaining <= 0
+  // aviso cuando queda exactamente 1 (ajústalo al 10% si quieres)
+  const sacksNearLimit = sacksEnt.limit !== null && sacksEnt.remaining === 1
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [scales, setScales] = useState([])
@@ -230,7 +257,7 @@ export default function ReviewSacksPage() {
     }
     load()
     return () => { mounted = false }
-  }, [attemptId, testIdFromQS, testName])
+  }, [attemptId, testIdFromQS, testName, location.state])
 
   const totalEscalas = scales.length
   const completas = useMemo(() => {
@@ -250,7 +277,14 @@ export default function ReviewSacksPage() {
       const text = gen?.opinionText || gen?.text || ''
       setAiText(text)
       toaster.success({ title: 'Opinión IA generada y guardada' })
+      if (typeof refreshBilling === 'function') refreshBilling()
     } catch (e) {
+      const status = e?.response?.status ?? e?.status
+      if (status === 402) {
+        toaster.error({ title: 'Límite del plan', description: 'Has alcanzado el límite mensual de Opiniones IA.' })
+        if (typeof refreshBilling === 'function') refreshBilling()
+        return
+      }
       console.log('No se pudo generar opinión IA:', e)
       toaster.error({ title: 'No se pudo generar opinión IA' })
     } finally {
@@ -271,8 +305,19 @@ export default function ReviewSacksPage() {
       }
       await ClinicianApi.upsertReview(attemptId, payload)
       toaster.success({ title: isFinal ? "Revisión finalizada" : "Borrador guardado" })
-      if (isFinal) navigate("/app/clinic/evaluaciones", { replace: true })
+      if (typeof refreshBilling === 'function') refreshBilling()
+      navigate("/app/clinic/evaluaciones", { replace: true })
     } catch (e) {
+      const status = e?.response?.status ?? e?.status
+      if (isFinal && status === 402) {
+        toaster.error({
+          title: 'Límite del plan',
+          description: 'Has alcanzado el límite mensual de SACKS para tu plan.'
+        })
+        if (typeof refreshBilling === 'function') refreshBilling()
+        console.log("asdaskdja")
+        navigate("/app/clinic/evaluaciones", { replace: true })
+      }
       toaster.error({ title: "No se pudo guardar", description: e?.message || "Error" })
     } finally {
       setSaving(false)
@@ -285,6 +330,7 @@ export default function ReviewSacksPage() {
 
   return (
     <VStack align="stretch" gap="4">
+      {/* Header fijo */}
       <Card.Root p="3" position="sticky" top="0" zIndex="docked" bg="white" borderBottomWidth="1px">
         <HStack justify="space-between" wrap="wrap" gap="3">
           <HStack gap="3">
@@ -293,11 +339,32 @@ export default function ReviewSacksPage() {
           </HStack>
           <HStack gap="2">
             <Button onClick={() => save(false)} isLoading={saving} leftIcon={<LuSave />}>Guardar borrador</Button>
-            <Button colorPalette="brand" onClick={() => save(true)} isLoading={saving} leftIcon={<LuCheck />}>Finalizar</Button>
+            <Button
+              colorPalette="brand"
+              onClick={() => save(true)}
+              isLoading={saving}
+              isDisabled={sacksDisabled} // ⬅️ Deshabilita Finalizar si no hay cupo SACKS
+              leftIcon={<LuCheck />}
+            >
+              Finalizar
+            </Button>
           </HStack>
         </HStack>
       </Card.Root>
 
+      {/* Avisos de SACKS debajo del header */}
+      {!loading && (
+        <>
+          {sacksNearLimit && !sacksDisabled && (
+            <Banner>Te queda {sacksEnt.remaining} revisión SACKS este mes.</Banner>
+          )}
+          {sacksDisabled && (
+            <Banner kind="error">Límite mensual de SACKS agotado para tu plan.</Banner>
+          )}
+        </>
+      )}
+
+      {/* Escalas */}
       <Card.Root p="4">
         <VStack align="stretch" gap="4">
           {scales.map((s) => (
@@ -312,6 +379,7 @@ export default function ReviewSacksPage() {
         </VStack>
       </Card.Root>
 
+      {/* Sumario */}
       <Card.Root p="4">
         <Heading size="sm" mb="3">Sumario interpretativo</Heading>
         <VStack align="stretch" gap="3">
@@ -336,8 +404,18 @@ export default function ReviewSacksPage() {
         </VStack>
       </Card.Root>
 
+      {/* Opinión IA */}
       <Card.Root p="4">
         <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+
+        {/* Avisos de cupo de Opinión IA */}
+        {aiNearLimit && !aiDisabled && (
+          <Banner>Te quedan {aiEnt.remaining} opiniones IA este mes.</Banner>
+        )}
+        {aiDisabled && (
+          <Banner kind="error">Límite mensual de Opiniones IA agotado para tu plan.</Banner>
+        )}
+
         <Box position="relative">
           {loadingAi && (
             <HStack position="absolute" inset="0" bg="whiteAlpha.700" justify="center" align="center" zIndex="1">
@@ -364,7 +442,9 @@ export default function ReviewSacksPage() {
             }}
           />
           <HStack justify="flex-end" mt="12px">
-            <Button onClick={generateAiOpinion} isLoading={loadingAi}>Obtener opinión IA</Button>
+            <Button onClick={generateAiOpinion} isLoading={loadingAi} isDisabled={aiDisabled}>
+              Obtener opinión IA
+            </Button>
           </HStack>
         </Box>
       </Card.Root>

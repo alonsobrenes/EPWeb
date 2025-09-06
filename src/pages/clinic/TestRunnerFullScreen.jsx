@@ -9,14 +9,15 @@ import { TestsApi } from '../../api/testsApi'
 import ClinicianApi from '../../api/clinicianApi'
 import client from '../../api/client'
 import { useNavigate } from 'react-router-dom'
+import { useBillingStatus, pickEntitlement } from '../../hooks/useBilling'
 
+// Helpers
 function getErrorMessage(error) {
   const data = error?.response?.data
   if (typeof data === 'string') return data
   if (data?.message) return data.message
   return error?.message || 'Error'
 }
-
 function normalizeType(qtRaw) {
   const t = String(qtRaw || '').toLowerCase().trim()
   if (!t) return 'open'
@@ -27,7 +28,6 @@ function normalizeType(qtRaw) {
   if (t === 'likert' || t.startsWith('likert')) return 'single'
   return 'open'
 }
-
 function parseLikertSpec(rawType) {
   const t = String(rawType || '').toLowerCase().trim()
   if (!t.startsWith('likert')) return null
@@ -44,14 +44,12 @@ function parseLikertSpec(rawType) {
   }
   return { start: 1, end: 4 }
 }
-
 function defaultLikertLabels(start, end) {
   const count = end - start + 1
   if (start === 0 && end === 3) return ['Nunca', 'A veces', 'A menudo', 'Siempre']
   if (start === 1 && end === 4) return ['Nunca', 'Algunas veces', 'Bastante', 'Siempre']
   return Array.from({ length: count }, (_, i) => `${start + i}`)
 }
-
 function buildLikertOptions(rawType, qid) {
   const spec = parseLikertSpec(rawType) || { start: 1, end: 4 }
   const { start, end } = spec
@@ -61,14 +59,12 @@ function buildLikertOptions(rawType, qid) {
     return { id: `${qid}-likert-${value}`, value, label: labels[i] ?? String(value), order: i + 1 }
   })
 }
-
 function buildYesNoOptions(qid) {
   return [
     { id: `${qid}-yesno-1`, value: 1, label: 'Sí', order: 1 },
     { id: `${qid}-yesno-0`, value: 0, label: 'No', order: 2 },
   ]
 }
-
 const DEFAULT_SCHEMES = {
   likert4: [
     { value: 1, label: 'Nunca', order: 1 },
@@ -81,25 +77,30 @@ const DEFAULT_SCHEMES = {
     { value: 0, label: 'No', order: 2 },
   ],
 }
-
 function storageKey({ testId, patientId, assignmentId }) {
   return `ep:test:${testId}:patient:${patientId}${assignmentId ? `:assign:${assignmentId}` : ''}`
 }
 
-// =======================
-// Local scoring fallback
-// =======================
-// Usa sólo preguntas y respuestas locales, y si el server trae escalas en 0, usamos sus códigos/nombres
-// y calculamos los puntajes por tríadas (IPA: 45 preguntas -> 15 escalas).
+// Banner simple
+function Banner({ kind = 'warning', children, mb = '3' }) {
+  const bg = kind === 'error' ? 'red.50' : 'yellow.50'
+  const border = kind === 'error' ? 'red.200' : 'yellow.200'
+  const color = kind === 'error' ? 'red.800' : 'yellow.800'
+  return (
+    <Box bg={bg} borderWidth="1px" borderColor={border} color={color} rounded="md" p="2" mb={mb}>
+      <Text fontSize="sm">{children}</Text>
+    </Box>
+  )
+}
+
+// ===== Scoring fallback =====
 function computeResultsFallback({ questions, answers, serverScales = null }) {
   const qByCodeNum = new Map()
-  const qById = new Map(questions.map(q => [q.id, q]))
   for (const q of questions) {
     const m = (q.code ? String(q.code) : '').match(/(\d+)/)
     if (m) qByCodeNum.set(Number(m[1]), q)
   }
   const isIPA = (questions.length === 45)
-  // Base de escalas: si el server nos dio códigos los usamos, si no inventamos 15 por orden
   let scaleSkeleton = []
   if (Array.isArray(serverScales) && serverScales.length) {
     scaleSkeleton = serverScales.map(s => ({ code: s.code || s.scaleCode, name: s.name || s.scaleName }))
@@ -123,27 +124,22 @@ function computeResultsFallback({ questions, answers, serverScales = null }) {
     ]
   }
 
-  function coerceNum(x) {
-    const n = Number(x)
-    return Number.isFinite(n) ? n : null
-  }
+  function coerceNum(x) { const n = Number(x); return Number.isFinite(n) ? n : null }
   function getMinMax(q) {
-    if (q && Array.isArray(q.options) && q.options.length) {
+    if (q?.options?.length) {
       const nums = q.options.map(o => coerceNum(o?.value)).filter(v => v != null)
       if (nums.length) return { min: Math.min(...nums), max: Math.max(...nums) }
     }
     return { min: 1, max: 4 }
   }
   function valueForQuestion(q, rawVal) {
-    // rawVal en este runner es: string | string[] | undefined
     if (Array.isArray(rawVal) && rawVal.length) {
       const nums = rawVal.map(coerceNum).filter(v => v != null)
       if (nums.length) return nums.reduce((a,b)=>a+b,0)
     }
     const n = coerceNum(rawVal)
     if (n != null) return n
-    // si llegó como label, intenta match por label
-    if (q && q.options && typeof rawVal === 'string') {
+    if (q?.options && typeof rawVal === 'string') {
       const byLabel = q.options.find(o => String(o.label) === rawVal)
       const n2 = coerceNum(byLabel?.value)
       if (n2 != null) return n2
@@ -157,12 +153,7 @@ function computeResultsFallback({ questions, answers, serverScales = null }) {
   for (let i = 0; i < scaleSkeleton.length; i++) {
     const s = scaleSkeleton[i]
     let scaleRaw = 0, scaleMin = 0, scaleMax = 0
-
-    // ítems por tríada (IPA) si aplica
-    let itemCodes = []
-    if (isIPA) {
-      itemCodes = [i + 1, i + 16, i + 31] // 1..15 / 16..30 / 31..45
-    }
+    const itemCodes = isIPA ? [i + 1, i + 16, i + 31] : []
 
     for (const num of itemCodes) {
       const q = qByCodeNum.get(num)
@@ -182,8 +173,7 @@ function computeResultsFallback({ questions, answers, serverScales = null }) {
 
     const percent = (scaleMax > scaleMin) ? ((scaleRaw - scaleMin) / (scaleMax - scaleMin)) * 100 : null
     outScales.push({
-      scaleCode: s.code,
-      scaleName: s.name,
+      scaleCode: s.code, scaleName: s.name,
       raw: Number(scaleRaw.toFixed(4)),
       min: Number(scaleMin.toFixed(4)),
       max: Number(scaleMax.toFixed(4)),
@@ -199,15 +189,8 @@ function computeResultsFallback({ questions, answers, serverScales = null }) {
   }
 }
 
-export default function TestRunnerFullScreen({
-  open,
-  onClose,
-  test,
-  patient,
-  assignmentId = null,
-}) {
+export default function TestRunnerFullScreen({ open, onClose, test, patient, assignmentId = null }) {
   const navigate = useNavigate()
-
   const testId = test?.id
   const patientId = patient?.id
 
@@ -227,16 +210,23 @@ export default function TestRunnerFullScreen({
   const [loadingAi, setLoadingAi] = useState(false)
   const [savingAi, setSavingAi] = useState(false)
   const [attemptIdAuto, setAttemptIdAuto] = useState(null)
+  const [aiLimitReached, setAiLimitReached] = useState(false)
 
-  // scoring_mode (si viene del prop o backend)
+  // Billing (solo para tests auto)
+  const { data: billing, refresh: refreshBilling } = useBillingStatus()
+  const testsEnt = pickEntitlement(billing, 'tests.auto.monthly')
+
+  // Predicción + valor "congelado" para el banner post-envío
+  const predictedRemainingAfterSubmitRef = useRef(null)
+  const firstRemainingAfterRef = useRef(null) // ← fix: congelamos el primer remaining visto en Resultados
+
+  // scoring_mode
   const [scoringMode, setScoringMode] = useState(() => (test?.scoring_mode ?? test?.scoringMode ?? null))
   useEffect(() => {
     const sm = test?.scoring_mode ?? test?.scoringMode ?? null
     if (sm && sm !== scoringMode) setScoringMode(sm)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [test?.scoring_mode, test?.scoringMode])
-
-  // (eliminado) NO deducimos 'clinician' solo por existencia de escalas
 
   useEffect(() => {
     if (!open ) return
@@ -251,9 +241,8 @@ export default function TestRunnerFullScreen({
     async function load() {
       setLoading(true); setError(null); setResult(null)
       try {
-        // Resolver testId/patientId desde la asignación si hace falta
-        let tid = testId
-        let pid = patientId
+        // Resolver testId/patientId desde asignación si hace falta
+        let tid = testId, pid = patientId
         if (!tid && assignmentId) {
           try {
             const { data: a } = await client.get(`/assignments/${assignmentId}`)
@@ -304,21 +293,15 @@ export default function TestRunnerFullScreen({
               : (options.length > 0 ? 'single' : baseType))
 
           return {
-            id: q.id,
-            code: q.code,
-            text: q.text,
-            rawType: rawType || '',
-            type: finalType,
-            isOptional: !!q.isOptional,
-            order: q.orderNo || q.order_no || 0,
+            id: q.id, code: q.code, text: q.text,
+            rawType: rawType || '', type: finalType,
+            isOptional: !!q.isOptional, order: q.orderNo || q.order_no || 0,
             options,
           }
         }).sort((a, b) => (a.order - b.order))
 
-        if (!alive) return
         setQuestions(norm)
         startedAtRef.current = new Date().toISOString()
-
         const raw = localStorage.getItem(storageKey({ testId: (effTestId ?? testId), patientId: (effPatientId ?? patientId), assignmentId }))
         if (raw) {
           try {
@@ -330,7 +313,6 @@ export default function TestRunnerFullScreen({
           setAnswers({}); setIndex(0)
         }
       } catch (e) {
-        if (!alive) return
         setError(getErrorMessage(e))
       } finally {
         if (alive) setLoading(false)
@@ -340,47 +322,23 @@ export default function TestRunnerFullScreen({
     return () => { alive = false }
   }, [open, testId, patientId, assignmentId])
 
-  // Reemplaza tu persist() por este
-function persist(toast = false) {
-  try {
-    // IDs efectivos (con defensas, NO dependen de variables locales de load())
-    const effTestId =
-      (typeof resolvedTestIdRef !== 'undefined' && resolvedTestIdRef?.current) ||
-      testId ||
-      (test?.id ?? null)
+  function persist(toast = false) {
+    try {
+      const effTestId =
+        (resolvedTestIdRef?.current) || testId || (test?.id ?? null)
+      const effPatientId =
+        (resolvedPatientIdRef?.current) || patientId || null
+      const effAssignmentId = assignmentId ?? null
 
-    const effPatientId =
-      (typeof resolvedPatientIdRef !== 'undefined' && resolvedPatientIdRef?.current) ||
-      patientId ||
-      null
-
-    const effAssignmentId = assignmentId ?? null
-
-    const key = storageKey({
-      testId: effTestId,
-      patientId: effPatientId,
-      assignmentId: effAssignmentId,
-    })
-    // Guarda el estado actual, NO uses "built" aquí
-    const payload = {
-      testId: effTestId,
-      patientId: effPatientId,
-      assignmentId: effAssignmentId,
-      index,
-      answers, // <- este es tu estado actual
-      updatedAt: new Date().toISOString(),
-      version: 1,
+      const key = storageKey({ testId: effTestId, patientId: effPatientId, assignmentId: effAssignmentId })
+      const payload = { testId: effTestId, patientId: effPatientId, assignmentId: effAssignmentId, index, answers, updatedAt: new Date().toISOString(), version: 1 }
+      localStorage.setItem(key, JSON.stringify(payload))
+      if (toast) toaster.success({ title: 'Progreso guardado' })
+    } catch (e) {
+      console.error(e)
+      toaster.error({ title: 'No se pudo guardar progreso', description: String(e) })
     }
-
-    localStorage.setItem(key, JSON.stringify(payload))
-    if (toast) toaster.success({ title: 'Progreso guardado' })
-  } catch (e) {
-    console.error(e)
-    toaster.error({ title: 'No se pudo guardar progreso', description: String(e) })
   }
-}
-
-
   const saveTimer = useRef(null)
   useEffect(() => {
     if (!open) return
@@ -389,20 +347,16 @@ function persist(toast = false) {
     return () => clearTimeout(saveTimer.current)
   }, [answers, index, open])
 
-  // ---- HEURÍSTICA ROBUSTA PARA MODO CLÍNICO ----
+  // Modo clínico (SACKS / todo-open / explicit)
   const allOpenNoOptions = useMemo(
     () => questions.length > 0 && questions.every(q => q.type === 'open' && (!q.options || q.options.length === 0)),
     [questions]
   )
-  const isSacksName = useMemo(
-    () => (test?.name || '').toUpperCase().includes('SACKS'),
-    [test?.name]
-  )
+  const isSacksName = useMemo(() => (test?.name || '').toUpperCase().includes('SACKS'), [test?.name])
   const isClinicianRun = useMemo(
     () => (String(scoringMode ?? '').toLowerCase() === 'clinician') || isSacksName || allOpenNoOptions,
     [scoringMode, isSacksName, allOpenNoOptions]
   )
-  // -----------------------------------------------
 
   if (!open) return null
 
@@ -430,7 +384,7 @@ function persist(toast = false) {
   async function handleSubmit() {
     try {
       setSaving(true)
-      // 1) construir respuestas normalizadas
+      // 1) respuestas normalizadas
       const built = []
       for (const q of questions) {
         const val = answers[q.id]
@@ -449,49 +403,51 @@ function persist(toast = false) {
         answers: built,
       }
 
-      // 2) Rama clínica (SACKS / explícito / todo-open)
+      // 2) SACKS / clínico
       if (isClinicianRun) {
         const { attemptId } = await ClinicianApi.createAttempt({
           testId: (resolvedTestIdRef?.current || testId || test?.id),
           patientId: (resolvedPatientIdRef?.current || patientId) ?? null,
           answers: built
         })
-
         try { localStorage.removeItem(storageKey({ testId: (resolvedTestIdRef?.current || testId || test?.id), patientId: (resolvedPatientIdRef?.current || patientId), assignmentId })) } catch {}
-
         toaster.success({ title: 'Respuestas registradas. Abriendo hoja de calificación…' })
-
         navigate(`/app/clinic/review/${attemptId}?testId=${(resolvedTestIdRef?.current || testId || test?.id)}${(resolvedPatientIdRef?.current || patientId) ? `&patientId=${(resolvedPatientIdRef?.current || patientId)}` : ''}`, {
           replace: true,
-          state: {
-            reviewAttemptId: attemptId,
-            testId,
-            testName: test?.name ?? null,
-            answers: built,
-            patientId: patientId ?? null,
-            assignmentId: assignmentId ?? null,
-          },
+          state: { reviewAttemptId: attemptId, testId, testName: test?.name ?? null, answers: built, patientId: patientId ?? null, assignmentId: assignmentId ?? null },
         })
         return
       }
 
-      // 3) Rama automática (mostrar Resultados)
-      const data = await TestsApi.submitRun(payload)
+      // 3) Automático
+      let data
+      try {
+        // antes de enviar, calculamos remaining pre
+        const preRemaining = (testsEnt && testsEnt.limit !== null) ? (testsEnt.remaining ?? null) : null
+        if (preRemaining != null) {
+          predictedRemainingAfterSubmitRef.current = Math.max(0, preRemaining - 1)
+        } else {
+          predictedRemainingAfterSubmitRef.current = null
+        }
 
-      // si el server trae escalas inválidas (0/0), calcula en cliente
+        data = await TestsApi.submitRun(payload)
+      } catch (e) {
+        const status = e?.response?.status ?? e?.status
+        if (status === 402) {
+          toaster.error({ title: 'Límite del plan', description: 'Has alcanzado el límite mensual de Tests automáticos.' })
+          if (typeof refreshBilling === 'function') refreshBilling()
+          return
+        }
+        throw e
+      }
+
+      // resultados
       const invalid = !data || !Array.isArray(data.scales) || data.scales.length === 0 ||
                       data.scales.every(s => Number(s.min) === 0 && Number(s.max) === 0)
-
-      if (invalid) {
-        console.log('[runner] submitRun devolvió escalas inválidas; calculando fallback…')
-        const fk = computeResultsFallback({ questions, answers, serverScales: data?.scales || null })
-        setResult(fk)
-      } else {
-        setResult(data)
-      }
+      setResult(invalid ? computeResultsFallback({ questions, answers, serverScales: data?.scales || null }) : data)
       toaster.success({ title: 'Resultados calculados' })
 
-      // (opcional) loggear intento auto y persistir respuestas para historial/PDF
+      // log y opinión IA
       try {
         const { attemptId } = await ClinicianApi.logAutoAttempt({
           testId: (resolvedTestIdRef?.current || testId || test?.id),
@@ -506,42 +462,37 @@ function persist(toast = false) {
           valuesJson: Array.isArray(a.values) && a.values.length ? JSON.stringify(a.values.map(String)) : null,
         }))
         await ClinicianApi.saveAttemptAnswers(attemptId, norm)
-        // === Generar (o recuperar) Opinión IA ===
+
         try {
-          setAttemptIdAuto(attemptId)
           setLoadingAi(true)
-          if (ClinicianApi.generateAttemptAiOpinion) {
-            const gen = await ClinicianApi.generateAttemptAiOpinion(attemptId, {
-              model: 'gpt-4o-mini',
-              promptVersion: 'v1.0'
-            })
-            const text = gen?.opinionText || gen?.text || ''
-            if (text) setAiText(text)
-          } else {
-            // fallback: intentar leer la existente
-            const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
-            const text = ai?.opinionText || ai?.text || ''
-            if (text) setAiText(text)
+          const gen = await ClinicianApi.generateAttemptAiOpinion?.(attemptId, { model: 'gpt-4o-mini', promptVersion: 'v1.0' })
+          const text = gen?.opinionText || gen?.text || ''
+          if (text) setAiText(text)
+          else {
+            try {
+              const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+              const t = ai?.opinionText || ai?.text || ''
+              if (t) setAiText(t)
+            } catch {}
           }
         } catch (e) {
-          console.log('No se pudo generar/leer opinión IA:', e)
+          const status = e?.response?.status ?? e?.status
+          if (status === 402) {
+            setAiLimitReached(true)
+            setAiText('Límite del plan: Opiniones IA agotadas este mes.')
+            if (typeof refreshBilling === 'function') refreshBilling()
+          } else {
+            console.debug('No se pudo generar/leer opinión IA:', e)
+          }
         } finally {
           setLoadingAi(false)
         }
-
-        // cargar opinión existente (si la hubiera)
-        try {
-          setLoadingAi(true)
-          const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
-          const text = ai?.opinionText || ai?.text || ''
-          setAiText(text)
-        } catch {}
-        finally { setLoadingAi(false) }
       } catch (e) {
         console.log('No se pudo loggear el intento auto:', e)
       }
 
       try { localStorage.removeItem(storageKey({ testId: (resolvedTestIdRef?.current || testId || test?.id), patientId: (resolvedPatientIdRef?.current || patientId), assignmentId })) } catch {}
+      if (typeof refreshBilling === 'function') refreshBilling()
     } catch (e) {
       toaster.error({ title: 'No se pudo enviar el test', description: getErrorMessage(e) })
     } finally {
@@ -552,7 +503,6 @@ function persist(toast = false) {
   function renderQuestion(q) {
     const val = answers[q.id]
     const toKey = (x) => (x == null ? '' : String(x))
-
     if (q.type === 'single' && q.options?.length) {
       const valueStr = toKey(val)
       return (
@@ -570,7 +520,6 @@ function persist(toast = false) {
         </VStack>
       )
     }
-
     if (q.type === 'multi' && q.options?.length) {
       const arr = Array.isArray(val) ? val : []
       return (
@@ -596,7 +545,6 @@ function persist(toast = false) {
         </VStack>
       )
     }
-
     return (
       <Textarea
         value={String(val ?? '')}
@@ -626,12 +574,32 @@ function persist(toast = false) {
     const totalRaw = result?.totalRaw ?? null
     const totalPercent = result?.totalPercent ?? null
     const scales = result?.scales || []
+
+    // Calculamos el remaining post-envío. Tomamos el PRIMER valor y lo "congelamos" para evitar parpadeo.
+    const entNow = pickEntitlement(billing, 'tests.auto.monthly')
+    const currentRemaining = (entNow && entNow.limit !== null && typeof entNow.remaining === 'number')
+      ? entNow.remaining
+      : predictedRemainingAfterSubmitRef.current
+
+    if (firstRemainingAfterRef.current === null) {
+      firstRemainingAfterRef.current = currentRemaining
+    }
+    const frozenRemaining = firstRemainingAfterRef.current
+    const showYellowRemaining1 = frozenRemaining === 1
+
     return (
       <Box maxW="980px" mx="auto" borderWidth="1px" rounded="lg" p={{ base: 3, md: 5 }} bg="white">
         <HStack mb="3" align="center" gap="2">
           <FiCheckCircle />
           <Heading size="md">Resultados</Heading>
         </HStack>
+
+        {showYellowRemaining1 && (
+          <Banner kind="warning" mb="2">
+            Te queda 1 test automático este mes.
+          </Banner>
+        )}
+
         {totalRaw != null && (
           <Box mb="4">
             <Text><b>Total bruto:</b> {Number(totalRaw).toFixed(2)}</Text>
@@ -669,9 +637,16 @@ function persist(toast = false) {
           </Table.Root>
         </Box>
 
-        {/* Opinión IA (editable) */}
+        {/* Opinión IA */}
         <Box mt="6" borderWidth="1px" rounded="md" p="3" position="relative">
           <Heading size="sm" mb="3">Opinión del asistente de IA</Heading>
+
+          {aiLimitReached && (
+            <Banner kind="error" mb="2">
+              Límite mensual de Opiniones IA agotado para tu plan.
+            </Banner>
+          )}
+
           {loadingAi && (
             <HStack position="absolute" inset="0" bg="whiteAlpha.700" justify="center" align="center" zIndex="1">
               <Spinner />
@@ -714,6 +689,13 @@ function persist(toast = false) {
   const total = questions.length
   const progress = total ? Math.round((answeredCount() / total) * 100) : 0
   const q = questions[index]
+
+  // Envío auto: deshabilitar cuando ya no hay cupo.
+  const submitDisabled =
+    (!isClinicianRun) && (testsEnt?.limit !== null) && (testsEnt?.remaining <= 0)
+
+  // No mostramos near-limit en preguntas
+  const submitNearLimit = false
 
   return (
     <Box position="fixed" inset="0" bg="white" zIndex="modal" h="100vh" overflowY="auto" style={{ WebkitOverflowScrolling: "touch" }}>
@@ -770,6 +752,14 @@ function persist(toast = false) {
               </HStack>
             </HStack>
 
+            {/* sin near-limit en preguntas */}
+            {!isClinicianRun && submitNearLimit && !submitDisabled && (
+              <Banner>Te quedan {testsEnt?.remaining} tests automáticos este mes.</Banner>
+            )}
+            {!isClinicianRun && submitDisabled && (
+              <Banner kind="error">Límite mensual de Tests automáticos agotado para tu plan.</Banner>
+            )}
+
             <Heading size="md" mb="3">{q?.text}</Heading>
             {renderQuestion(q)}
 
@@ -795,7 +785,12 @@ function persist(toast = false) {
 
             <HStack justify="space-between">
               <Button variant="outline" onClick={handleSaveExit} isLoading={saving}>Guardar y salir</Button>
-              <Button colorPalette="green" onClick={handleSubmit} isLoading={saving}>
+              <Button
+                colorPalette="green"
+                onClick={handleSubmit}
+                isLoading={saving}
+                disabled={submitDisabled}
+              >
                 {isClinicianRun ? 'Terminar y revisar' : 'Terminar y calcular'}
               </Button>
             </HStack>

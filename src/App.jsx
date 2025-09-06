@@ -7,6 +7,7 @@ import LoginBlock from "./pages/LoginBlock"
 import SignupBlock from "./pages/SignupBlock"
 import Landing from "./pages/Landing"
 import Forbidden from "./pages/Forbidden"
+import Pricing from "./pages/Pricing"
 import AppShellSidebarCollapsible from "./components/AppShellSidebarCollapsible"
 import ErrorBoundary from "./components/ErrorBoundary"
 import { ROLES } from "./auth/roles"
@@ -176,8 +177,8 @@ export default function App() {
         },
       ],
     },
-
     { path: "/403", element: <Forbidden /> },
+    { path: "/pricing", element: <Pricing /> },
     { path: "/login", element: <LoginBlock /> },
     { path: "/signup", element: <SignupBlock /> },
     { path: "*", element: <Navigate to="/" replace /> },
