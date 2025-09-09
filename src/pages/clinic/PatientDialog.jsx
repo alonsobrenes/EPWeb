@@ -11,6 +11,7 @@ import { TestsApi } from '../../api/testsApi'
 import { LuExternalLink, LuTrash2, LuDownload } from 'react-icons/lu'
 import { generateAttemptPdf } from '../../reports/generateAttemptPdf'
 import { InterviewApi } from '../../api/interviewApi'
+import { PatientAttachmentsApi } from '../../api/patientAttachmentsApi'
 import { generateInterviewPdf } from '../../utils/generateInterviewPdf'
 
 function FieldLabel({ children }) {
@@ -22,7 +23,6 @@ const ID_TYPES = [
   { value: 'dimex', label: 'DIMEX' },
   { value: 'pasaporte', label: 'Pasaporte' },
 ]
-
 
 // ================== TAB: Primera Entrevista (resumen) ==================
 function PatientFirstInterviewTab({ patientId, patientName }) {
@@ -127,6 +127,255 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
     </VStack>
   )
 }
+
+// ====================== TAB: Adjuntos (nuevo, sin tocar lo demás) ======================
+function PatientAttachmentsTab({ patientId }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [file, setFile] = useState(null)
+  const [comment, setComment] = useState('')
+  const [limitBytes, setLimitBytes] = useState(null)
+
+  // Barra de cuota simple (sin Chakra Progress)
+function QuotaBar({ value = 0 }) {
+  const pct = Math.max(0, Math.min(100, Number(value) || 0))
+  return (
+    <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}
+         style={{
+           width: '100%',
+           height: 8,
+           borderRadius: 6,
+           background: 'var(--chakra-colors-blackAlpha-200)'
+         }}>
+      <div style={{
+        width: `${pct}%`,
+        height: '100%',
+        borderRadius: 6,
+        background: 'var(--chakra-colors-blue-500)',
+        transition: 'width 200ms ease'
+      }} />
+    </div>
+  )
+}
+
+  const sumUsedBytes = (arr) =>
+    (arr || []).reduce((acc, it) => acc + (Number(it.size ?? it.byteSize ?? 0) || 0), 0)
+
+  const toHuman = (bytes) => {
+    if (!Number.isFinite(bytes)) return '—'
+    const u = ['B','KB','MB','GB','TB']; let i=0, v=bytes
+    while (v >= 1024 && i < u.length-1) { v/=1024; i++ }
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
+  }
+
+  const bytesToHuman = (n) => {
+    if (!Number.isFinite(n)) return '—'
+    const u = ['B','KB','MB','GB','TB']
+    let i = 0, v = n
+    while (v >= 1024 && i < u.length-1) { v /= 1024; i++ }
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
+  }
+
+  const load = async () => {
+    try {
+      setLoading(true)
+      const list = await PatientAttachmentsApi.list(patientId)
+      setItems(Array.isArray(list) ? list : [])
+      // después de setItems(onlyActive)
+      try {
+        const lb = await PatientAttachmentsApi.storageLimitBytes()
+        setLimitBytes(lb) // puede ser null si no hay entitlements
+      } catch { /* opcional: no hacemos nada */ }
+
+    } catch (e) {
+      toaster.error({ title: 'No se pudieron cargar los adjuntos', description: e?.message || 'Error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!patientId) { setItems([]); setLoading(false); return }
+    let alive = true
+    ;(async () => { await load() })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId])
+
+  const onUpload = async () => {
+    if (!file) {
+      toaster.error({ title: 'Seleccione un archivo' })
+      return
+    }
+    try {
+      setUploading(true)
+      await PatientAttachmentsApi.upload(patientId, file, comment || null)
+      setFile(null); setComment('')
+      await load()
+      toaster.success({ title: 'Archivo subido' })
+    } catch (e) {
+      const st = e?.response?.status
+      if (st === 402) {
+        toaster.error({ title: 'Cuota alcanzada', description: 'Ha alcanzado la cuota de almacenamiento de su plan.' })
+      } else if (st === 413) {
+        toaster.error({ title: 'Archivo muy grande', description: 'El archivo excede el tamaño máximo permitido.' })
+      } else if (st === 400) {
+        toaster.error({ title: 'Tipo de archivo no permitido' })
+      } else {
+        toaster.error({ title: 'No se pudo subir', description: e?.message || 'Error' })
+      }
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const onDownload = async (fileId, name) => {
+    try {
+      const { blob, filename } = await PatientAttachmentsApi.download(fileId, name)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toaster.error({ title: 'No se pudo descargar', description: e?.message || 'Error' })
+    }
+  }
+
+
+  const onDelete = async (fileId) => {
+    const ok = window.confirm('¿Eliminar este archivo?')
+    if (!ok) return
+    try {
+      await PatientAttachmentsApi.remove(fileId)
+      setItems(prev => prev.filter(x => (x.fileId || x.file_id) !== fileId))
+      //await load()
+      toaster.success({ title: 'Archivo eliminado' })
+    } catch (e) {
+      toaster.error({ title: 'No se pudo eliminar', description: e?.message || 'Error' })
+    }
+  }
+
+  if (!patientId) {
+    return <Text color="fg.muted">Guarde el paciente antes de gestionar adjuntos.</Text>
+  }
+
+  return (
+    <VStack align="stretch" gap="3">
+      {/* Form de subida (sin iconos extra para no tocar imports) */}
+      <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
+        <Text fontWeight="semibold">Subir archivo</Text>
+        <HStack gap="2" wrap="wrap">
+          <input
+            type="file"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+            accept=".pdf,image/png,image/jpeg"
+            style={{ padding: '8px' }}
+          />
+          <Input
+            placeholder="Comentario (opcional)"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+          />
+          <Button onClick={onUpload} isLoading={uploading} loadingText="Subiendo…">
+            Subir
+          </Button>
+          <Button variant="ghost" onClick={load}>
+            Actualizar
+          </Button>
+        </HStack>
+        <Text textStyle="xs" color="fg.muted">Permitidos: PDF, PNG, JPG. El servidor valida tipo/tamaño y cuotas.</Text>
+        {/* Barra de cuota */}
+    {(() => {
+  const used = sumUsedBytes(items)
+  if (typeof limitBytes === 'number' && limitBytes > 0) {
+    const pct = Math.min(100, Math.round((used / limitBytes) * 100))
+    return (
+      <VStack align="stretch" gap="1" mt="2">
+        <HStack justify="space-between">
+          <Text textStyle="sm">Almacenamiento</Text>
+          <Text textStyle="sm" color="fg.muted">
+            {toHuman(used)} / {toHuman(limitBytes)} ({pct}%)
+          </Text>
+        </HStack>
+        <QuotaBar value={pct} />
+      </VStack>
+    )
+  }
+  return (
+    <Text textStyle="sm" color="fg.muted" mt="2">
+      Usado: {toHuman(used)}
+    </Text>
+  )
+})()}
+
+
+      </VStack>
+
+      <Separator />
+
+      <Table.Root size="sm" variant="outline">
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeader minW="240px">Nombre</Table.ColumnHeader>
+            <Table.ColumnHeader minW="120px">Tamaño</Table.ColumnHeader>
+            <Table.ColumnHeader minW="160px">Fecha</Table.ColumnHeader>
+            <Table.ColumnHeader>Comentario</Table.ColumnHeader>
+            <Table.ColumnHeader textAlign="right" minW="160px">Acción</Table.ColumnHeader>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {loading ? (
+            <Table.Row><Table.Cell colSpan={5}><Text color="fg.muted" py="4">Cargando…</Text></Table.Cell></Table.Row>
+          ) : items.length === 0 ? (
+            <Table.Row><Table.Cell colSpan={5}><Text color="fg.muted" py="4">Sin adjuntos.</Text></Table.Cell></Table.Row>
+          ) : (
+            items.map(it => {
+              const fileId = it.fileId || it.file_id
+              const name = it.name || it.originalName || 'archivo'
+              const size = it.size ?? it.byteSize ?? 0
+              const dt = it.uploadedAtUtc || it.uploaded_at_utc
+              const note = it.comment || ''
+              const downloadUrl = PatientAttachmentsApi.getDownloadUrl(fileId)
+
+              return (
+                <Table.Row key={fileId}>
+                  <Table.Cell><Text>{name}</Text></Table.Cell>
+                  <Table.Cell>{bytesToHuman(size)}</Table.Cell>
+                  <Table.Cell>{dt ? new Date(dt).toLocaleString() : '—'}</Table.Cell>
+                  <Table.Cell><Text textStyle="sm" color="fg.muted">{note}</Text></Table.Cell>
+                  <Table.Cell>
+                    <HStack justify="flex-end" gap="1">
+                      {/* <a href={downloadUrl} target="_blank" rel="noreferrer">
+                        <Button size="xs" variant="ghost">Descargar</Button>
+                      </a> */}
+                      <Button size="xs" variant="ghost" onClick={() => onDownload(fileId, name)}>
+                        Descargar
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        colorPalette="red"
+                        onClick={() => onDelete(fileId)}
+                      >
+                        Eliminar
+                      </Button>
+                    </HStack>
+                  </Table.Cell>
+                </Table.Row>
+              )
+            })
+          )}
+        </Table.Body>
+      </Table.Root>
+    </VStack>
+  )
+}
+
 
 // ====================== Historial del paciente ======================
 function PatientHistory({ patientId, patientName, onClose }) {
@@ -622,8 +871,9 @@ export default function PatientDialog({
               >
                 <Tabs.List>
                   <Tabs.Trigger value="datos">Datos</Tabs.Trigger>
-                  <Tabs.Trigger value="hist" disabled={!hasId}>Historial</Tabs.Trigger>
                   <Tabs.Trigger value="inter" disabled={!hasId}>Entrevista</Tabs.Trigger>
+                  <Tabs.Trigger value="hist" disabled={!hasId}>Historial</Tabs.Trigger>
+                  <Tabs.Trigger value="adj" disabled={!hasId}>Archivos Adjuntos</Tabs.Trigger>
                 </Tabs.List>
 
                 <VStack align="stretch" gap="4" mt="3">
@@ -725,6 +975,13 @@ export default function PatientDialog({
                     </VStack>
                   </Tabs.Content>
 
+                  <Tabs.Content value="inter">
+                    <PatientFirstInterviewTab
+                      patientId={patientId}
+                      patientName={patientName}
+                    />
+                  </Tabs.Content>
+
                   <Tabs.Content value="hist">
                     <PatientHistory
                       patientId={patientId}
@@ -733,12 +990,10 @@ export default function PatientDialog({
                     />
                   </Tabs.Content>
 
-                  <Tabs.Content value="inter">
-                    <PatientFirstInterviewTab
-                      patientId={patientId}
-                      patientName={patientName}
-                    />
-                  </Tabs.Content>
+                 <Tabs.Content value="adj">
+                    <PatientAttachmentsTab patientId={patientId} />
+                </Tabs.Content>
+
                 </VStack>
               </Tabs.Root>
             </Dialog.Body>
