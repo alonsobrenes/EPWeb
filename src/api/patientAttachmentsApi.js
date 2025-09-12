@@ -20,10 +20,10 @@ function tryGetOrgId() {
 }
 
 function withOrgHeader(extra = {}) {
-  const orgId = tryGetOrgId()
-  if (orgId) {
-    return { ...extra, 'X-Org-Id': orgId }
-  }
+  // const orgId = tryGetOrgId()
+  // if (orgId) {
+  //   return { ...extra, 'X-Org-Id': orgId }
+  // }
   return extra
 }
 

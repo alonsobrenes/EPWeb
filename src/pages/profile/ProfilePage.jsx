@@ -118,9 +118,13 @@ export default function ProfilePage() {
       const discPaged = await DisciplinesApi.list({ page: 1, pageSize: 1000 })
       const items = discPaged?.items || []
       setAllDisciplines(items)
-
       const mine = await ProfileApi.getMyDisciplines() // { items: [{ id, code, name }] }
-      const ids = new Set((mine?.items || []).map(d => d.id))
+      // const ids = new Set((mine?.items || []).map(d => d.id))
+
+      const mineItems = Array.isArray(mine) ? mine : (mine?.items || [])
+      const ids = new Set(mineItems.map(d => d.id))
+
+
       setMyDisciplineIds(ids)
     } catch (e) {
       toaster.error({ title: "No se pudieron cargar disciplinas", description: e?.message || "Error" })

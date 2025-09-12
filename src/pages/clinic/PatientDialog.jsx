@@ -13,6 +13,8 @@ import { generateAttemptPdf } from '../../reports/generateAttemptPdf'
 import { InterviewApi } from '../../api/interviewApi'
 import { PatientAttachmentsApi } from '../../api/patientAttachmentsApi'
 import { generateInterviewPdf } from '../../utils/generateInterviewPdf'
+import QuotaStrip from '../../components/billing/QuotaStrip'
+import PaywallCTA from "../../components/billing/PaywallCTA"
 
 function FieldLabel({ children }) {
   return <Text textStyle="sm" color="fg.muted" mb="1">{children}</Text>
@@ -95,6 +97,7 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
   if (!data) {
     return (
       <VStack align="stretch" gap="3">
+        <QuotaStrip show={['ai.opinion.monthly', 'storage.gb']} showHints />
         <Text color="fg.muted">Este paciente no tiene una primera entrevista registrada.</Text>
         <HStack><Button onClick={goInterview} colorPalette="brand">Crear / Abrir entrevista</Button></HStack>
       </VStack>
@@ -128,16 +131,7 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
   )
 }
 
-// ====================== TAB: Adjuntos (nuevo, sin tocar lo demás) ======================
-function PatientAttachmentsTab({ patientId }) {
-  const [items, setItems] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [file, setFile] = useState(null)
-  const [comment, setComment] = useState('')
-  const [limitBytes, setLimitBytes] = useState(null)
-
-  // Barra de cuota simple (sin Chakra Progress)
+// Barra de cuota simple (sin Chakra Progress)
 function QuotaBar({ value = 0 }) {
   const pct = Math.max(0, Math.min(100, Number(value) || 0))
   return (
@@ -158,6 +152,17 @@ function QuotaBar({ value = 0 }) {
     </div>
   )
 }
+
+// ====================== TAB: Adjuntos (nuevo, sin tocar lo demás) ======================
+function PatientAttachmentsTab({ patientId }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [file, setFile] = useState(null)
+  const [comment, setComment] = useState('')
+  const [limitBytes, setLimitBytes] = useState(null)
+  const [paywall, setPaywall] = useState(false)
+  const [ownershipError, setOwnershipError] = useState(false)
 
   const sumUsedBytes = (arr) =>
     (arr || []).reduce((acc, it) => acc + (Number(it.size ?? it.byteSize ?? 0) || 0), 0)
@@ -180,6 +185,7 @@ function QuotaBar({ value = 0 }) {
   const load = async () => {
     try {
       setLoading(true)
+      setOwnershipError(false)
       const list = await PatientAttachmentsApi.list(patientId)
       setItems(Array.isArray(list) ? list : [])
       // después de setItems(onlyActive)
@@ -190,6 +196,13 @@ function QuotaBar({ value = 0 }) {
 
     } catch (e) {
       toaster.error({ title: 'No se pudieron cargar los adjuntos', description: e?.message || 'Error' })
+      const st = e?.response?.status
+      const msg = e?.response?.data?.message || e?.message || ''
+      if (st === 404 && msg.includes('no pertenece a su organización'))
+        {
+            setOwnershipError(true)
+             setItems([])
+      }
     } finally {
       setLoading(false)
     }
@@ -208,6 +221,11 @@ function QuotaBar({ value = 0 }) {
       toaster.error({ title: 'Seleccione un archivo' })
       return
     }
+    if (ownershipError)
+    {
+        toaster.error({ title: 'Paciente de otra organización', description: 'Seleccione o cree un paciente de su organización actual.' })
+      return
+    }
     try {
       setUploading(true)
       await PatientAttachmentsApi.upload(patientId, file, comment || null)
@@ -218,7 +236,15 @@ function QuotaBar({ value = 0 }) {
       const st = e?.response?.status
       if (st === 402) {
         toaster.error({ title: 'Cuota alcanzada', description: 'Ha alcanzado la cuota de almacenamiento de su plan.' })
-      } else if (st === 413) {
+        const msg = e?.response?.data?.message || 'Tu período de prueba expiró o alcanzaste la cuota de tu plan.'
+        toaster.error({ title: 'Necesitas un plan activo', description: msg })
+        setPaywall(true)
+      } else if (st === 404 && (e?.response?.data?.message || '').includes('no pertenece a su organización'))
+        {
+            setOwnershipError(true)
+             toaster.error({ title: 'Paciente de otra organización', description: 'Seleccione o cree un paciente de su organización actual.' })
+       }
+        else if (st === 413) {
         toaster.error({ title: 'Archivo muy grande', description: 'El archivo excede el tamaño máximo permitido.' })
       } else if (st === 400) {
         toaster.error({ title: 'Tipo de archivo no permitido' })
@@ -266,8 +292,22 @@ function QuotaBar({ value = 0 }) {
 
   return (
     <VStack align="stretch" gap="3">
+      {ownershipError && (
+        <div style = { { border: '1px solid var(--chakra-colors-red-200)', background: 'var(--chakra-colors-red-50)', padding: 10, borderRadius: 8 } }>
+          <div style = { { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 } }>
+            <span>Este paciente pertenece a otra organización.Seleccione o cree un paciente de su organización actual.</span>
+            <button onClick ={ () => window.location.assign('/app/clinic/pacientes')}
+style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--chakra-colors-red-300)', background: 'white' }}>
+              Cambiar paciente
+            </button>
+          </div>
+        </div>
+      )}
+      {paywall && <PaywallCTA />}
       {/* Form de subida (sin iconos extra para no tocar imports) */}
-      <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
+      <VStack align = "stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle"
+        opacity={ownershipError? 0.6 : 1} pointerEvents={ownershipError? 'none' : 'auto'}>
+
         <Text fontWeight="semibold">Subir archivo</Text>
         <HStack gap="2" wrap="wrap">
           <input
@@ -293,8 +333,13 @@ function QuotaBar({ value = 0 }) {
     {(() => {
   const used = sumUsedBytes(items)
   if (typeof limitBytes === 'number' && limitBytes > 0) {
-    const pct = Math.min(100, Math.round((used / limitBytes) * 100))
-    return (
+    //const pct = Math.min(100, Math.round((used / limitBytes) * 100))
+    const pct = (Number.isFinite(used) && Number.isFinite(limitBytes) && limitBytes > 0)
+  ? ((used / limitBytes) * 100).toFixed(2)
+  : null
+
+  const barColor = storageColorFromPct(pct)
+return (
       <VStack align="stretch" gap="1" mt="2">
         <HStack justify="space-between">
           <Text textStyle="sm">Almacenamiento</Text>
@@ -302,7 +347,7 @@ function QuotaBar({ value = 0 }) {
             {toHuman(used)} / {toHuman(limitBytes)} ({pct}%)
           </Text>
         </HStack>
-        <QuotaBar value={pct} />
+        <QuotaBar value={pct ?? 0} color={barColor} />
       </VStack>
     )
   }
@@ -755,6 +800,17 @@ async function downloadRow(row) {
     </VStack>
   )
 }
+
+// Color para barra de almacenamiento según porcentaje usado:
+function storageColorFromPct(pct) {
+  if (isNaN(pct)) return undefined
+  if (!Number.isFinite( Number.parseFloat(pct))) return undefined
+  if (pct >= 100) return "red"
+  if (pct >= 80)  return "orange"
+  if (pct < 80)  return "blue"
+  return undefined
+}
+
 
 // ====================== Dialog principal ======================
 export default function PatientDialog({
