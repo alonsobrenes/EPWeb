@@ -128,11 +128,7 @@ export default function EvaluationsPage() {
       setLoading(false)
     }
   }
-
-  useEffect(() => { load() }, []) // primera carga
-
-  useEffect(() => { load() }, [page, pageSize]) // paginación
-
+  
   const onSearch = (e) => {
     e.preventDefault()
     setPage(1)

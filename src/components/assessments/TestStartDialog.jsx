@@ -7,6 +7,9 @@ import {
 import { toaster } from './../../components/ui/toaster'
 import api from '../../api/client'               // axios con baseURL al API (p.ej. https://localhost:53793/api)
 import { AssignmentsApi } from '../../api/assignmentsApi'
+import QuotaStrip from '../../components/billing/QuotaStrip'
+import PaywallCTA from "../../components/billing/PaywallCTA"
+
 
 /** Lee el origin del API a partir de axios.baseURL o VITE_API_BASE */
 function getApiOrigin() {
@@ -196,6 +199,7 @@ export default function TestStartDialog({ open, onOpenChange, test, onStarted })
   const [patientId, setPatientId] = useState('')
   const [patientName, setPatientName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [paywall, setPaywall] = useState(false) 
 
   useEffect(() => {
     // reset al abrir
@@ -228,27 +232,38 @@ export default function TestStartDialog({ open, onOpenChange, test, onStarted })
       onStarted?.({ test, testId: test.id, patient: { id: patientId, name: patientName }, patientId, assignmentId })
     } catch (err) {
       toaster.error({ title: 'No se pudo iniciar', description: getErrorMessage(err) })
+      const status = err?.response?.status
+      const msg = getErrorMessage(err)
+      if (status === 402) {
+        toaster.error({
+          title: 'Necesitas un plan activo',
+          description: msg || 'Tu período de prueba expiró o alcanzaste el límite mensual de tu plan.',
+        })
+        setPaywall(true)
+      } else {
+        toaster.error({ title: 'No se pudo iniciar', description: msg })
+      }
+
+
     } finally {
       setBusy(false)
     }
   }
-
   return (
     <>
       {/* Backdrop */}
       <Box position="fixed" inset="0" bg="blackAlpha.600" zIndex="modal" />
-
       {/* Modal */}
       <Box role="dialog" aria-modal="true"
            position="fixed" inset="0" display="grid" placeItems="center" zIndex="modal">
         <Box bg="white" rounded="xl" shadow="lg" borderWidth="1px"
              width="min(96vw, 1180px)" p={{ base: 4, md: 6 }} position="relative">
           <CloseButton position="absolute" top="3" right="3" onClick={() => onOpenChange?.(false)} />
-
           {/* Encabezado */}
           <Heading size="xl" mb="1" lineHeight="short">{name}</Heading>
           {code ? <Text color="fg.muted" mb="4">{code}</Text> : null}
-
+          <QuotaStrip show={['tests.auto.monthly', 'sacks.monthly']} showHints />
+          {paywall && <PaywallCTA onAfterClick={() => onOpenChange?.(false)} />}
           {/* Grid: PDF a la izquierda, info + asignación a la derecha */}
           <Box
             display="grid"

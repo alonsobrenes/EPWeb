@@ -20,6 +20,9 @@ import Recorder from "../../components/interview/Recorder"
 import { InterviewApi } from "../../api/interviewApi"
 import { PatientsApi } from "../../api/patientsApi"
 import { generateInterviewPdf } from "../../utils/generateInterviewPdf"
+import QuotaStrip from '../../components/billing/QuotaStrip'
+import PaywallCTA from "../../components/billing/PaywallCTA"
+
 
 /* ======================= helpers ======================= */
 function getErrorMessage(error) {
@@ -157,17 +160,52 @@ export default function InterviewPage() {
   const [busySave, setBusySave] = useState(false)
   const [proDiag, setProDiag] = useState("")
   const [busyPro, setBusyPro] = useState(false)
+  const [paywall, setPaywall] = useState(false)
+
+    // === Nuevo: si viene desde PatientDialog, preseleccionar el paciente ===
+  useEffect(() => {
+    const presetId = qs.get("patientId")
+    console.log('preset',presetId)
+    if (!presetId) return
+    let alive = true
+    ;(async () => {
+      try {
+        // Usa la API existente de pacientes para traerlo por Id
+        const p = await PatientsApi.getById(presetId)
+        if (!alive) return
+        setPatient(p) // con esto la UI queda con el paciente ya elegido
+      } catch (e) {
+        // si no existe, no rompemos nada: simplemente queda el buscador vacío
+        // opcional: toaster.warn({ title: 'Paciente no encontrado' })
+      }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search])
 
   async function ensureInterview() {
     if (!patient?.id) {
       toaster.warning({ title: "Falta el paciente" })
       throw new Error("no-patient")
     }
-    if (interviewId) return interviewId
-    const { id } = await InterviewApi.create({ patientId: patient.id })
-    setInterviewId(id)
-    toaster.success({ title: "Entrevista creada" })
-    return id
+
+    try{
+      if (interviewId) return interviewId
+      const { id } = await InterviewApi.create({ patientId: patient.id })
+      setInterviewId(id)
+      toaster.success({ title: "Entrevista creada" })
+      return id
+    }catch (e) {
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        toaster.error({ title: "Error al crear entrevista" })
+      }
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function onAudioStop(file) {
@@ -177,8 +215,11 @@ export default function InterviewPage() {
       await InterviewApi.uploadAudio(id, file)
       toaster.success({ title: "Audio subido" })
     } catch (e) {
-      if (e?.message !== "no-patient") {
-        console.error(e)
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
         toaster.error({ title: "Error al subir audio" })
       }
     } finally {
@@ -204,7 +245,10 @@ export default function InterviewPage() {
       toaster.success({ title: cached ? "Transcripción cargada (cache)" : "Transcripción lista" })
     } catch (e) {
       const status = e?.response?.status
-      if (status === 429) {
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." });
+        setPaywall(true)
+      } else if (status === 429) {
         const sec = e?.response?.data?.retryAfterSec ?? 20
         setCooldown(sec)
         toaster.warning({ title: "Servicio saturado. Intenta de nuevo en un momento." })
@@ -222,8 +266,14 @@ export default function InterviewPage() {
       await InterviewApi.saveTranscript(interviewId, { text: transcript, language: "es" })
       toaster.success({ title: "Transcripción guardada" })
     } catch (e) {
-      console.error(e)
-      toaster.error({ title: "Error al guardar transcripción" })
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        console.error(e)
+        toaster.error({ title: "Error al guardar transcripción" })
+      }
     } finally {
       setBusyTranscript(false)
     }
@@ -240,9 +290,16 @@ export default function InterviewPage() {
       setDraft(content || "")
       toaster.success({ title: "Borrador generado" })
     } catch (e) {
-      console.error(e)
-      toaster.error({ title: "Error generando borrador" })
-    } finally {
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        console.error(e)
+        toaster.error({ title: "Error generando borrador" })
+      }
+    }
+     finally {
       setBusyGenerate(false)
     }
   }
@@ -257,8 +314,14 @@ export default function InterviewPage() {
       const target = backTo ? decodeURIComponent(backTo) : DASHBOARD_PATH
       navigate(target, { replace: true })
     } catch (e) {
-      console.error(e)
-      toaster.error({ title: "Error al guardar borrador" })
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        console.error(e)
+        toaster.error({ title: "Error al guardar borrador" })
+      }
     } finally {
       setBusySave(false)
     }
@@ -273,8 +336,14 @@ export default function InterviewPage() {
       await InterviewApi.saveDraft(interviewId, { content: draft })
       toaster.success({ title: "Borrador guardado" })
     } catch (e) {
-      console.error(e)
-      toaster.error({ title: "Error al guardar borrador" })
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        console.error(e)
+        toaster.error({ title: "Error al guardar borrador" })
+      }
     } finally {
       setBusySave(false)
     }
@@ -291,15 +360,21 @@ export default function InterviewPage() {
         // En caso de que aún no exista en InterviewApi, lanzamos un error claro
         throw new Error("InterviewApi.saveClinicianDiagnosis no está definido")
       }
-      toaster.success({ title: close ? "Diagnóstico guardado y entrevista cerrada" : "Diagnóstico guardado" })      
+      toaster.success({ title: close ? "Diagnóstico guardado y entrevista cerrada" : "Diagnóstico guardado" })
       if (close) {
         const target = backTo ? decodeURIComponent(backTo)
   : `/app/clinic/pacientes?openPatientId=${patient?.id ?? ""}&tab=inter`
         navigate(target, { replace: true })
       }
     } catch (e) {
-      console.error(e)
-      toaster.error({ title: "No se pudo guardar el diagnóstico" })
+      const status = e?.response?.status
+      if (status === 402) {
+        toaster.error({ title: "Tu período de prueba expiró. Elige un plan para continuar." })
+        setPaywall(true)
+      } else {
+        console.error(e)
+        toaster.error({ title: "Error al guardar diagnóstico" })
+      }
     } finally {
       setBusyPro(false)
     }
@@ -331,8 +406,9 @@ export default function InterviewPage() {
 
   return (
     <VStack align="stretch" gap="16px" p="16px">
+      {paywall && <PaywallCTA />}
       <Heading size="lg">Primera Entrevista</Heading>
-
+      <QuotaStrip show={['ai.opinion.monthly', 'storage.gb']} showHints/>
       <Card.Root p="16px">
         {!patient ? (
           <InlinePatientSearch

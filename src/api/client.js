@@ -16,10 +16,32 @@ const api = axios.create({
   // timeout: 15000, // opcional
 })
 
+function decodeJwtPayload() {
+  try {
+    const raw =
+      localStorage.getItem("authToken") || sessionStorage.getItem("authToken") ||
+      localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+    const token = raw.startsWith("Bearer ") ? raw.slice(7) : raw;
+    const [, payload] = token.split(".");
+    if (!payload) return {};
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json);
+  } catch { return {}; }
+}
 // Adjunta el Bearer token si existe
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(AUTH_TOKEN_KEY)
   if (token) config.headers.Authorization = `Bearer ${token}`
+
+  const p = decodeJwtPayload();
+  const orgId =
+    p.org_id || p.orgId || p["org_id"] || p["orgId"]; // contempla variantes
+  if (orgId) {
+    config.headers["X-Org-Id"] = orgId;
+  } else {
+    // si no hay org en el token, no mandes header (evita arrastrar uno viejo)
+    delete config.headers["X-Org-Id"];
+  }
   return config
 })
 

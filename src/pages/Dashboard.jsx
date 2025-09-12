@@ -93,6 +93,19 @@ function useDashboardData() {
           } catch {}
         }
 
+        if (patientsTotal === 0 && testsTotal === 0) {
+          weekly = 0
+          tops = []
+        }
+
+        try {
+          const acc = await TestsApi.forMe({ page: 1, pageSize: 50 })
+          const allowed = new Set((acc?.items || []).map(x => x.id))
+          if (allowed.size > 0 && Array.isArray(tops)) {
+            tops = tops.filter(t => allowed.has(t.id))
+          }
+        } catch { /* si falla, dejamos tops tal cual */ }
+
         if (!cancelled) {
           setCounts({ tests: testsTotal, patients: patientsTotal, weeklyRuns: weekly })
           setRecentPatients(recent)
