@@ -431,11 +431,67 @@ export default function TestRunnerFullScreen({ open, onClose, test, patient, ass
         }
 
         data = await TestsApi.submitRun(payload)
-      } catch (e) {
+            } catch (e) {
         const status = e?.response?.status ?? e?.status
         if (status === 402) {
-          toaster.error({ title: 'Límite del plan', description: 'Has alcanzado el límite mensual de Tests automáticos.' })
+          // Gracia: permitimos “aterrizar” mostrando resultados locales y registrando intento clínico
+          toaster.error({
+            title: 'Límite del plan',
+            description: 'Has alcanzado el límite mensual de Tests automáticos. Guardaremos este test para revisión clínica.'
+          })
+
+          // 1) Resultados locales (fallback) para que el usuario vea algo
+          const fb = computeResultsFallback({ questions, answers, serverScales: null })
+          setResult(fb)
+
+          // 2) Registrar intento clínico  respuestas, como en el bloque normal más abajo
+          try {
+            const { attemptId } = await ClinicianApi.createAttempt({
+              testId: (resolvedTestIdRef?.current || testId || test?.id),
+              patientId: (resolvedPatientIdRef?.current || patientId) ?? null,
+              answers: built
+            })
+            setAttemptIdAuto(attemptId)
+
+            const norm = built.map(a => ({
+              questionId: a.questionId,
+              text: a.text ?? null,
+              value: a.value != null ? String(a.value) : null,
+              valuesJson: Array.isArray(a.values) && a.values.length ? JSON.stringify(a.values.map(String)) : null,
+            }))
+            await ClinicianApi.saveAttemptAnswers(attemptId, norm)
+
+            // 3) Intentar IA (respetando su propia cuota)
+            try {
+              setLoadingAi(true)
+              const gen = await ClinicianApi.generateAttemptAiOpinion?.(attemptId, { model: 'gpt-4o-mini', promptVersion: 'v1.0' })
+              const text = gen?.opinionText || gen?.text || ''
+              if (text) setAiText(text)
+              else {
+                try {
+                  const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
+                  const t = ai?.opinionText || ai?.text || ''
+                  if (t) setAiText(t)
+                } catch {}
+              }
+            } catch (err2) {
+              const st2 = err2?.response?.status ?? err2?.status
+              if (st2 === 402) {
+                setAiLimitReached(true)
+                setAiText('Límite del plan: Opiniones IA agotadas este mes.')
+              } else {
+                console.debug('No se pudo generar/leer opinión IA (fallback 402):', err2)
+              }
+            } finally {
+              setLoadingAi(false)
+            }
+          } catch (logErr) {
+            console.debug('No se pudo loggear intento clínico tras 402:', logErr)
+          }
+
+          try { localStorage.removeItem(storageKey({ testId: (resolvedTestIdRef?.current || testId || test?.id), patientId: (resolvedPatientIdRef?.current || patientId), assignmentId })) } catch {}
           if (typeof refreshBilling === 'function') refreshBilling()
+          // IMPORTANTE: no retornamos; dejamos que el flujo continúe con el ResultsView ya montado
           return
         }
         throw e

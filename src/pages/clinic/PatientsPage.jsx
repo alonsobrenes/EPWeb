@@ -11,6 +11,7 @@ import PatientDialog from './PatientDialog'
 import { toaster } from '../../components/ui/toaster'
 import { Tip } from '../../components/ui/tooltip'
 
+
 function getErrorMessage(error) {
   const data = error?.response?.data
   if (typeof data === 'string') return data
@@ -61,7 +62,8 @@ export default function PatientsPage() {
   )
 
   // si viene openPatientId y NO closeDialog=1, abrimos el diálogo
-  const openFromUrl = !!qsOpenId && !qsCloseDialog
+  //const openFromUrl = !!qsOpenId && !qsCloseDialog
+  const openFromUrl = !!qsOpenId && !qsCloseDialog && !loading && !!fromUrlRow
   const dialogIsOpen = formOpen || openFromUrl
 
   // initial values/tab del diálogo
@@ -100,7 +102,7 @@ export default function PatientsPage() {
     }
   }
 
-  useEffect(() => { load() }, []) // init
+  //useEffect(() => { load() }, []) // init
   useEffect(() => { load({ keepSelection: true }) }, [page, pageSize, activeFilter]) // eslint-disable-line
 
   const onNew = () => { setSelectedId(null); setFormOpen(true) }

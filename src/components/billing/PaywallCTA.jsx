@@ -30,7 +30,7 @@ export default function PaywallCTA({ message, showManage = false, onAfterClick }
   }
 
   return (
-    <Card.Root p="12px" borderWidth="1px" bg="orange.50" p="10px">
+    <Card.Root p="12px" borderWidth="1px" bg="orange.50">
         <HStack justify="space-between" align="center">
             <Text>{msg}</Text>
           <Button onClick={goPricing} colorPalette="brand">Elegir plan</Button>

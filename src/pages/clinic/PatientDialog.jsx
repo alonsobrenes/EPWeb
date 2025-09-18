@@ -1,8 +1,8 @@
 // src/pages/clinic/PatientDialog.jsx
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   Dialog, Portal, Button, HStack, VStack, Input, Text, Switch, Grid, GridItem,
-  Tabs, Table, Badge, Separator, IconButton, Textarea,
+  Tabs, Table, Badge, Separator, IconButton, Textarea, Wrap, WrapItem, Spinner, Box
 } from '@chakra-ui/react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { toaster } from '../../components/ui/toaster'
@@ -15,6 +15,9 @@ import { PatientAttachmentsApi } from '../../api/patientAttachmentsApi'
 import { generateInterviewPdf } from '../../utils/generateInterviewPdf'
 import QuotaStrip from '../../components/billing/QuotaStrip'
 import PaywallCTA from "../../components/billing/PaywallCTA"
+import { ProfileApi } from '../../api/profileApi'
+import PatientSessionsTab from './PatientSessionsTab'
+import EditableInterviewHashtags from "../../components/hashtags/EditableInterviewHashtags"
 
 function FieldLabel({ children }) {
   return <Text textStyle="sm" color="fg.muted" mb="1">{children}</Text>
@@ -25,6 +28,107 @@ const ID_TYPES = [
   { value: 'dimex', label: 'DIMEX' },
   { value: 'pasaporte', label: 'Pasaporte' },
 ]
+
+function PatientLabelsSection({ patientId }) {
+  const [allLabels, setAllLabels] = useState([])
+  const [assigned, setAssigned] = useState(new Set())
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    // Si no hay patientId (caso "Nuevo paciente"), apaga el loading y no muestres nada
+    if (!patientId) {
+      setAllLabels([])
+      setAssigned(new Set())
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    try {
+      const labelsResp = await ProfileApi.getLabels()
+      const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
+      setAllLabels(all)
+
+      const assignedResp = await ProfileApi.getLabelsFor({ type: 'patient', id: patientId })
+      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      setAssigned(new Set(mine.map(x => x.id)))
+    } catch (e) {
+      toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
+      // En caso de error, no bloquees la UI
+      setAllLabels([])
+      setAssigned(new Set())
+    } finally {
+      setLoading(false)
+    }
+  }, [patientId])
+
+  useEffect(() => { load() }, [load])
+
+  const toggleLabel = async (lbl) => {
+    if (!patientId) return
+    const isOn = assigned.has(lbl.id)
+    try {
+      setSaving(true)
+      if (isOn) {
+        await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'patient', targetId: patientId })
+        const next = new Set(assigned); next.delete(lbl.id); setAssigned(next)
+      } else {
+        await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'patient', targetId: patientId })
+        const next = new Set(assigned); next.add(lbl.id); setAssigned(next)
+      }
+    } catch (e) {
+      toaster.error({ title: isOn ? 'No se pudo quitar etiqueta' : 'No se pudo asignar etiqueta', description: e?.message || 'Error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Reglas de visibilidad:
+  // - Mientras carga y HAY patientId => muestra spinner en línea.
+  // - Si ya no carga y no hay etiquetas => no muestres nada (oculta toda la sección).
+  if (!loading && allLabels.length === 0) {
+    return null
+  }
+
+  return (
+    <Box ml="6" mt="6">
+      <HStack justify="space-between" mb="2">
+        <Text fontWeight="medium">Etiquetas del paciente</Text>
+        {patientId && loading && (
+          <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
+        )}
+      </HStack>
+
+      {allLabels.length > 0 && (
+        <Wrap spacing="2">
+          {allLabels.map(lbl => {
+            const active = assigned.has(lbl.id)
+            return (
+              <WrapItem key={lbl.id}>
+                <Button
+                  size="xs"
+                  variant={active ? 'solid' : 'outline'}
+                  onClick={() => toggleLabel(lbl)}
+                  isDisabled={saving || lbl.isSystem === true}
+                  style={{
+                    borderColor: lbl.colorHex,
+                    background: active ? lbl.colorHex : 'transparent',
+                    color: active ? '#fff' : 'inherit'
+                  }}
+                  title={lbl.name}
+                >
+                  {lbl.code}
+                </Button>
+              </WrapItem>
+            )
+          })}
+        </Wrap>
+      )}
+    </Box>
+  )
+}
+
 
 // ================== TAB: Primera Entrevista (resumen) ==================
 function PatientFirstInterviewTab({ patientId, patientName }) {
@@ -97,7 +201,7 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
   if (!data) {
     return (
       <VStack align="stretch" gap="3">
-        <QuotaStrip show={['ai.opinion.monthly', 'storage.gb']} showHints />
+        <QuotaStrip show={['ai.credits.monthly', 'storage.gb']} showHints />
         <Text color="fg.muted">Este paciente no tiene una primera entrevista registrada.</Text>
         <HStack><Button onClick={goInterview} colorPalette="brand">Crear / Abrir entrevista</Button></HStack>
       </VStack>
@@ -127,6 +231,9 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
 
       <Text textStyle="sm" color="fg.muted" mt="2">Diagnóstico del profesional</Text>
       <Textarea readOnly minH="120px" value={data.clinicianDiagnosis || data.clinician_diagnosis || ''} placeholder="Sin diagnóstico profesional guardado" />
+      <EditableInterviewHashtags interviewId={data?.interviewId} disabled={loading}
+/>
+
     </VStack>
   )
 }
@@ -154,8 +261,11 @@ function QuotaBar({ value = 0 }) {
 }
 
 // ====================== TAB: Adjuntos (nuevo, sin tocar lo demás) ======================
-function PatientAttachmentsTab({ patientId }) {
+function PatientAttachmentsTab({ patientId, highlightAttachmentId }) {
   const [items, setItems] = useState([])
+  const [allLabels, setAllLabels] = useState([])
+  const [assignedMap, setAssignedMap] = useState(new Map()) // fileId -> Set(labelId)
+  const [savingLabelFor, setSavingLabelFor] = useState(null) // fileId
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [file, setFile] = useState(null)
@@ -163,6 +273,16 @@ function PatientAttachmentsTab({ patientId }) {
   const [limitBytes, setLimitBytes] = useState(null)
   const [paywall, setPaywall] = useState(false)
   const [ownershipError, setOwnershipError] = useState(false)
+
+  const rowRef = useRef(null)
+  useEffect(() => {
+    if (!highlightAttachmentId) return
+    // cuando items cambian, intentamos hacer scroll a la fila resaltada
+    const found = items.some(it => String(it.fileId ?? it.id) === String(highlightAttachmentId))
+    if (found && rowRef.current) {
+      try { rowRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch {}
+    }
+  }, [items, highlightAttachmentId])
 
   const sumUsedBytes = (arr) =>
     (arr || []).reduce((acc, it) => acc + (Number(it.size ?? it.byteSize ?? 0) || 0), 0)
@@ -182,13 +302,59 @@ function PatientAttachmentsTab({ patientId }) {
     return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
   }
 
+  const toggleAttachmentLabel = async (fileId, lbl) => {
+    if (!fileId || !lbl?.id) return
+    try {
+      setSavingLabelFor(fileId)
+      const current = new Set(assignedMap.get(fileId) || [])
+      const isOn = current.has(lbl.id)
+      if (isOn) {
+        await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
+        current.delete(lbl.id)
+      } else {
+        await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
+        current.add(lbl.id)
+      }
+      setAssignedMap(prev => {
+        const next = new Map(prev)
+        next.set(fileId, current)
+        return next
+      })
+    } catch (e) {
+      toaster.error({ title: 'No se pudo actualizar etiquetas', description: e?.message || 'Error' })
+    } finally {
+      setSavingLabelFor(null)
+    }
+  }
+
   const load = async () => {
     try {
       setLoading(true)
       setOwnershipError(false)
-      const list = await PatientAttachmentsApi.list(patientId)
-      setItems(Array.isArray(list) ? list : [])
-      // después de setItems(onlyActive)
+            const list = await PatientAttachmentsApi.list(patientId)
+      const arr = Array.isArray(list) ? list : []
+      setItems(arr)
+
+      try {
+        const labelsResp = await ProfileApi.getLabels()
+        const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
+        setAllLabels(all)
+      } catch { setAllLabels([]) }
+
+      try {
+        const pairs = await Promise.all(arr.map(async (it) => {
+          const fileId = it.fileId || it.file_id
+          try {
+            const resp = await ProfileApi.getLabelsFor({ type: 'attachment', id: fileId })
+            const mine = Array.isArray(resp?.items) ? resp.items : []
+            return [fileId, new Set(mine.map(x => x.id))]
+          } catch {
+            return [fileId, new Set()]
+          }
+        }))
+        setAssignedMap(new Map(pairs))
+      } catch { setAssignedMap(new Map()) }
+
       try {
         const lb = await PatientAttachmentsApi.storageLimitBytes()
         setLimitBytes(lb) // puede ser null si no hay entitlements
@@ -290,6 +456,10 @@ function PatientAttachmentsTab({ patientId }) {
     return <Text color="fg.muted">Guarde el paciente antes de gestionar adjuntos.</Text>
   }
 
+  // if (!loading && allLabels.length === 0) {
+  // return null;
+  // }
+
   return (
     <VStack align="stretch" gap="3">
       {ownershipError && (
@@ -366,11 +536,12 @@ return (
       <Table.Root size="sm" variant="outline">
         <Table.Header>
           <Table.Row>
-            <Table.ColumnHeader minW="240px">Nombre</Table.ColumnHeader>
-            <Table.ColumnHeader minW="120px">Tamaño</Table.ColumnHeader>
-            <Table.ColumnHeader minW="160px">Fecha</Table.ColumnHeader>
-            <Table.ColumnHeader>Comentario</Table.ColumnHeader>
-            <Table.ColumnHeader textAlign="right" minW="160px">Acción</Table.ColumnHeader>
+            <Table.ColumnHeader minW="200px" w="200px">Nombre</Table.ColumnHeader>
+            <Table.ColumnHeader w="80px"  minW="80px"  textAlign="center">Tamaño</Table.ColumnHeader>
+            <Table.ColumnHeader w="140px" minW="140px" textAlign="center">Fecha</Table.ColumnHeader>
+            <Table.ColumnHeader minW="220px" w="1fr">Comentario</Table.ColumnHeader>
+            <Table.ColumnHeader minW="140px" w="140px" textAlign="center">Etiquetas</Table.ColumnHeader>
+            <Table.ColumnHeader textAlign="right" minW="96px" w="96px">Acción</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -388,28 +559,78 @@ return (
               const downloadUrl = PatientAttachmentsApi.getDownloadUrl(fileId)
 
               return (
-                <Table.Row key={fileId}>
+                <Table.Row key={fileId}
+                   ref={ String(fileId) === String(highlightAttachmentId) ? rowRef : undefined }
+                   style={ String(fileId) === String(highlightAttachmentId)
+                          ? { outline: '2px solid var(--chakra-colors-blue-500)', background: 'var(--chakra-colors-blue-50)' }
+                          : undefined }
+                >
                   <Table.Cell><Text>{name}</Text></Table.Cell>
-                  <Table.Cell>{bytesToHuman(size)}</Table.Cell>
+                  {/* <Table.Cell>{bytesToHuman(size)}</Table.Cell>
                   <Table.Cell>{dt ? new Date(dt).toLocaleString() : '—'}</Table.Cell>
+                   */}
+                   <Table.Cell textAlign="center" w="80px"  minW="80px"  style={{whiteSpace:'nowrap'}}>{bytesToHuman(size)}</Table.Cell>
+                   <Table.Cell textAlign="center" w="140px" minW="140px" style={{whiteSpace:'nowrap'}}>{dt ? new Date(dt).toLocaleString() : '—'}</Table.Cell>
                   <Table.Cell><Text textStyle="sm" color="fg.muted">{note}</Text></Table.Cell>
+                  {/* tu celda actual de etiquetas */}
+ <Table.Cell>
+   <div
+     style={{
+       maxWidth: 140,                // más angosto
+       margin: '0 auto',            // centra el bloque en su columna
+       display: 'flex',
+       justifyContent: 'center',    // centra los swatches
+       alignItems: 'center',
+       gap: 6,
+       padding: '2px 0',
+       overflowX: 'auto',           // scroll solo aquí
+       scrollbarWidth: 'thin'       // Firefox: scrollbar delgada
+     }}
+   >
+     {allLabels.length === 0 ? (
+       <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
+     ) : (
+       allLabels.map(lbl => {
+         const active = (assignedMap.get(fileId) || new Set()).has(lbl.id)
+         return (
+           <button
+             key={`lbl-${fileId}-${lbl.id}`}
+             onClick={() => toggleAttachmentLabel(fileId, lbl)}
+             disabled={!!savingLabelFor || ownershipError || paywall}
+             title={`${lbl.code} — ${lbl.name}`}
+             style={{
+               width: 14, height: 14, minWidth: 14, minHeight: 14,
+               borderRadius: 4,
+               border: `2px solid ${lbl.colorHex}`,
+               background: active ? lbl.colorHex : 'transparent',
+               cursor: 'pointer'
+             }}
+             aria-label={`Etiqueta ${lbl.code}${active ? ' (asignada)' : ''}`}
+           />
+         )
+       })
+     )}
+   </div>
+ </Table.Cell>
+
                   <Table.Cell>
                     <HStack justify="flex-end" gap="1">
-                      {/* <a href={downloadUrl} target="_blank" rel="noreferrer">
-                        <Button size="xs" variant="ghost">Descargar</Button>
-                      </a> */}
-                      <Button size="xs" variant="ghost" onClick={() => onDownload(fileId, name)}>
-                        Descargar
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        colorPalette="red"
-                        onClick={() => onDelete(fileId)}
-                      >
-                        Eliminar
-                      </Button>
-                    </HStack>
+   <IconButton
+     size="xs"
+     variant="ghost"
+     aria-label="Descargar"
+     title="Descargar"
+     onClick={() => onDownload(fileId, name)}     
+   ><LuDownload /></IconButton>
+   <IconButton
+     size="xs"
+     variant="ghost"
+     colorPalette="red"
+     aria-label="Eliminar"
+     title="Eliminar"
+     onClick={() => onDelete(fileId)}    
+   ><LuTrash2 /></IconButton>
+ </HStack>
                   </Table.Cell>
                 </Table.Row>
               )
@@ -827,12 +1048,9 @@ export default function PatientDialog({
   const params = new URLSearchParams(location.search)
   const routerTab = location.state?.tab ?? params.get('tab') ?? null
   const computedInitialTab = initialTab || routerTab || 'datos'
+  const innerIdFromQS = params.get('id') || null
 
-  // Tabs controladas (Chakra v3: value / onValueChange)
-  const [tabValue, setTabValue] = useState(computedInitialTab)
-  useEffect(() => { setTabValue(computedInitialTab) }, [computedInitialTab])
-
-  const [form, setForm] = useState({
+  const EMPTY_FORM = {
     identificationType: 'cedula',
     identificationNumber: '',
     firstName: '',
@@ -843,8 +1061,14 @@ export default function PatientDialog({
     contactEmail: '',
     contactPhone: '',
     isActive: true,
-  })
+  };
 
+  // Tabs controladas (Chakra v3: value / onValueChange)
+  const [tabValue, setTabValue] = useState(computedInitialTab)
+  useEffect(() => { setTabValue(computedInitialTab) }, [computedInitialTab])
+  const [form, setForm] = useState(EMPTY_FORM);
+//   console.log("X")
+// console.log(tabValue)
   useEffect(() => {
     if (initialValues) {
       setForm({
@@ -860,9 +1084,10 @@ export default function PatientDialog({
         isActive: initialValues.isActive ?? true,
       })
     } else {
-      setForm((f) => ({ ...f, identificationType: 'cedula', isActive: true }))
+      setForm(EMPTY_FORM);
     }
-  }, [initialValues])
+    setTabValue( tabValue || 'datos');
+  }, [isOpen, initialValues])
 
   const change = (k, v) => setForm((prev) => ({ ...prev, [k]: v }))
 
@@ -887,9 +1112,9 @@ export default function PatientDialog({
   const patientId = initialValues?.id || null
   const patientName = [form.firstName, form.lastName1, form.lastName2].filter(Boolean).join(' ')
   const hasId = !!patientId
-
   return (
     <Dialog.Root
+      key={patientId || 'new'}
       role="dialog"
       open={isOpen}
       onOpenChange={(e) => e.open ? null : onClose?.()}
@@ -916,7 +1141,7 @@ export default function PatientDialog({
             <Dialog.Header bg="brand.50" _dark={{ bg: "gray.800" }} position="sticky" top="0" zIndex="1" borderBottomWidth="1px" borderColor="blackAlpha.200">
               <Dialog.Title>{initialValues ? 'Editar paciente' : 'Nuevo paciente'}</Dialog.Title>
             </Dialog.Header>
-
+            <PatientLabelsSection patientId={patientId} />
             {/* El body crece y hace scroll interno */}
             <Dialog.Body flex="1" overflowY="auto" minH={0}>
               <Tabs.Root
@@ -930,6 +1155,7 @@ export default function PatientDialog({
                   <Tabs.Trigger value="inter" disabled={!hasId}>Entrevista</Tabs.Trigger>
                   <Tabs.Trigger value="hist" disabled={!hasId}>Historial</Tabs.Trigger>
                   <Tabs.Trigger value="adj" disabled={!hasId}>Archivos Adjuntos</Tabs.Trigger>
+                  <Tabs.Trigger value="sess" disabled={!hasId}>Sesiones</Tabs.Trigger>
                 </Tabs.List>
 
                 <VStack align="stretch" gap="4" mt="3">
@@ -1047,9 +1273,11 @@ export default function PatientDialog({
                   </Tabs.Content>
 
                  <Tabs.Content value="adj">
-                    <PatientAttachmentsTab patientId={patientId} />
+                    <PatientAttachmentsTab patientId={patientId} highlightAttachmentId={innerIdFromQS}/>
                 </Tabs.Content>
-
+                <Tabs.Content value="sess">
+                <PatientSessionsTab patientId={patientId} patientName={patientName} autoOpenSessionId={innerIdFromQS} />
+      </Tabs.Content>
                 </VStack>
               </Tabs.Root>
             </Dialog.Body>

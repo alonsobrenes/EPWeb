@@ -62,12 +62,12 @@ const config = defineConfig({
       brand : {
         50:  { value: "#E8F2F2" }, // teal muy claro (fondos suaves)
         100: { value: "#CFE5E6" },
-        200: { value: "#A6CDD0" },
-        300: { value: "#7CB5B9" },
-        400: { value: "#549EA4" }, // bordes/hover
-        500: { value: "#3A858B" }, // color principal (botones, links)
-        600: { value: "#2E6B71" }, // hover/active
-        700: { value: "#24555A" }, // textos sobre tonos claros
+        200: { value: "#2596be" },
+        300: { value: "#2596be" },
+        400: { value: "#2596be" }, // bordes/hover
+        500: { value: "#2596be" }, // color principal (botones, links)
+        600: { value: "#2596be" }, // hover/active
+        700: { value: "#2596be" }, // textos sobre tonos claros
         800: { value: "#1B4448" },
         900: { value: "#153238" }, // ¡match exacto con el fondo del logo!
       },

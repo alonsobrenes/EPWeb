@@ -22,7 +22,8 @@ import { PatientsApi } from "../../api/patientsApi"
 import { generateInterviewPdf } from "../../utils/generateInterviewPdf"
 import QuotaStrip from '../../components/billing/QuotaStrip'
 import PaywallCTA from "../../components/billing/PaywallCTA"
-
+import HashtagsApi from "../../api/hashtagsApi"
+import EditableInterviewHashtags from "../../components/hashtags/EditableInterviewHashtags"
 
 /* ======================= helpers ======================= */
 function getErrorMessage(error) {
@@ -162,7 +163,64 @@ export default function InterviewPage() {
   const [busyPro, setBusyPro] = useState(false)
   const [paywall, setPaywall] = useState(false)
 
-    // === Nuevo: si viene desde PatientDialog, preseleccionar el paciente ===
+  // Hashtags detectados para esta entrevista (editable)
+  const [tags, setTags] = useState([])
+  const [loadingTags, setLoadingTags] = useState(false)
+  const [savingTags, setSavingTags] = useState(false)
+  const [newTag, setNewTag] = useState("")
+
+  // Normalizador simple: admite "#tag" o "tag", min 2–64, letras/numeros/_/-
+  const rxTag = /#?([\p{L}\p{N}_-]{2,64})/iu
+  const norm = (s) => {
+    const m = rxTag.exec(String(s || "").trim())
+    if (!m) return null
+    return m[1].toLowerCase()
+  }
+
+  async function loadHashtags(interviewIdToLoad) {
+    if (!interviewIdToLoad) return
+    setLoadingTags(true)
+    try {
+      const res = await HashtagsApi.getFor({ type: "interview", id: interviewIdToLoad })
+      const items = Array.isArray(res?.items) ? res.items : []
+      setTags(items.map(x => (x.tag || "").toString()).filter(Boolean))
+    } catch {
+      setTags([])
+    } finally {
+      setLoadingTags(false)
+    }
+  }
+
+  async function persistTags(next) {
+    if (!interviewId) return
+    setSavingTags(true)
+    try {
+      const unique = Array.from(new Set(next.filter(Boolean)))
+      const res = await HashtagsApi.setFor({ type: 'interview', id: interviewId, tags: unique })
+      const items = Array.isArray(res?.items) ? res.items : []
+      setTags(items.map(x => (x.tag || '').toString()))
+      toaster.success({ title: 'Hashtags actualizados' })
+    } catch (e) {
+      toaster.error({ title: 'No se pudieron guardar los hashtags' })
+    } finally {
+      setSavingTags(false)
+    }
+  }
+
+  async function addTag() {
+    const t = norm(newTag)
+    if (!t) return
+    const next = [...tags, t]
+    setNewTag("")
+    await persistTags(next)
+  }
+
+  async function removeTag(t) {
+    const next = tags.filter(x => x !== t)
+    await persistTags(next)
+  }
+
+  // === Nuevo: si viene desde PatientDialog, preseleccionar el paciente ===
   useEffect(() => {
     const presetId = qs.get("patientId")
     console.log('preset',presetId)
@@ -234,10 +292,10 @@ export default function InterviewPage() {
     return () => clearTimeout(t)
   }, [cooldown])
 
-  // Transcribir (Alt/Ctrl/Cmd para forzar). Comportamiento igual al tuyo, solo loadingText.
+  // Transcribir (Alt/Ctrl/Cmd para forzar).
   async function transcribe(ev) {
     try {
-      setBusy(true)
+      setBusyTranscript(true)
       const id = await ensureInterview()
       const force = !!(ev && (ev.altKey || ev.metaKey || ev.ctrlKey))
       const { text, cached } = await InterviewApi.transcribe(id, { force })
@@ -256,7 +314,7 @@ export default function InterviewPage() {
         console.error(e)
         toaster.error({ title: "Error al transcribir" })
       }
-    } finally { setBusy(false) }
+    } finally { setBusyTranscript(false) }
   }
 
   async function saveTranscript() {
@@ -265,6 +323,7 @@ export default function InterviewPage() {
     try {
       await InterviewApi.saveTranscript(interviewId, { text: transcript, language: "es" })
       toaster.success({ title: "Transcripción guardada" })
+      await loadHashtags(interviewId)
     } catch (e) {
       const status = e?.response?.status
       if (status === 402) {
@@ -310,6 +369,7 @@ export default function InterviewPage() {
     try {
       await InterviewApi.saveDraft(interviewId, { content: draft })
       toaster.success({ title: "Borrador guardado" })
+      await loadHashtags(interviewId)
       // ⬇⬇ Cerrar y regresar al dashboard (o a backTo si vino)
       const target = backTo ? decodeURIComponent(backTo) : DASHBOARD_PATH
       navigate(target, { replace: true })
@@ -327,7 +387,6 @@ export default function InterviewPage() {
     }
   }
 
-
   // Guardar borrador IA sin cerrar ni navegar
   async function saveDraftOnly() {
     if (!interviewId) return
@@ -335,6 +394,7 @@ export default function InterviewPage() {
     try {
       await InterviewApi.saveDraft(interviewId, { content: draft })
       toaster.success({ title: "Borrador guardado" })
+      await loadHashtags(interviewId)
     } catch (e) {
       const status = e?.response?.status
       if (status === 402) {
@@ -356,6 +416,7 @@ export default function InterviewPage() {
       setBusyPro(true)
       if (typeof InterviewApi.saveClinicianDiagnosis === "function") {
         await InterviewApi.saveClinicianDiagnosis(id, { text: proDiag, close })
+        await loadHashtags(interviewId)
       } else {
         // En caso de que aún no exista en InterviewApi, lanzamos un error claro
         throw new Error("InterviewApi.saveClinicianDiagnosis no está definido")
@@ -402,13 +463,22 @@ export default function InterviewPage() {
   }
 
   const patientName = patient ? fullName(patient) : null
-  const anyBusy = busy || busyTranscript || busyGenerate || busySave
+  const anyBusy = busy || busyTranscript || busyGenerate || busySave || busyPro || savingTags
 
   return (
     <VStack align="stretch" gap="16px" p="16px">
+      {anyBusy && (
+        <Box
+          position="fixed"
+          inset="0"
+          bg="blackAlpha.400"
+          style={{ backdropFilter: 'blur(1px)', cursor: 'progress' }}
+          zIndex={1000}
+        />
+      )}
       {paywall && <PaywallCTA />}
       <Heading size="lg">Primera Entrevista</Heading>
-      <QuotaStrip show={['ai.opinion.monthly', 'storage.gb']} showHints/>
+      <QuotaStrip show={['ai.credits.monthly', 'storage.gb']} showHints/>
       <Card.Root p="16px">
         {!patient ? (
           <InlinePatientSearch
@@ -530,6 +600,7 @@ export default function InterviewPage() {
 
       <Card.Root p="16px">
         <Heading size="sm" mb="12px">Diagnóstico del profesional</Heading>
+        <EditableInterviewHashtags interviewId={interviewId} disabled={anyBusy} />
         <Textarea
           minH="240px"
           value={proDiag}
@@ -557,7 +628,6 @@ export default function InterviewPage() {
           </Button>
         </HStack>
       </Card.Root>
-
 
       <HStack justify="end">
         <Button onClick={exportPdf} variant="outline" disabled={anyBusy}>

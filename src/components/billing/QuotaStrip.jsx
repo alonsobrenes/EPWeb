@@ -11,7 +11,7 @@ import { LuCircleAlert } from 'react-icons/lu'
  * - Evita componentes problemáticos: usa sólo Box/HStack/VStack/Badge/Text.
  *
  * Ejemplo:
- *   <QuotaStrip show={['tests.auto.monthly', 'sacks.monthly', 'ai.opinion.monthly', 'storage.gb']} />
+ *   <QuotaStrip show={['tests.auto.monthly', 'sacks.monthly', 'ai.credits.monthly', 'storage.gb']} />
  */
 
 function useSubscription() {
@@ -92,12 +92,12 @@ export default function QuotaStrip({ show, mb = '3', showHints = false }) {
   const LABELS = {
     'tests.auto.monthly': 'Tests automáticos',
     'sacks.monthly': 'SACKS',
-    'ai.opinion.monthly': 'Opiniones IA',
+    'ai.credits.monthly': 'Créditos IA',
     'storage.gb': 'Almacenamiento',
   }
 
   // Orden sugerido (si no se pasa show)
-  const ORDER = ['tests.auto.monthly', 'sacks.monthly', 'ai.opinion.monthly', 'storage.gb']
+  const ORDER = ['tests.auto.monthly', 'sacks.monthly', 'ai.credits.monthly', 'storage.gb']
 
   const features = Array.isArray(show) && show.length > 0 ? show : ORDER
 
