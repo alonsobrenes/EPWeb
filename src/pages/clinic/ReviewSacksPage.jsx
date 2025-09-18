@@ -143,7 +143,7 @@ export default function ReviewSacksPage() {
   const { data: billing, refresh: refreshBilling } = useBillingStatus()
 
   // Opinión IA
-  const aiEnt = pickEntitlement(billing, "ai.opinion.monthly")
+  const aiEnt = pickEntitlement(billing, "ai.credits.monthly")
   const aiDisabled  = aiEnt.limit !== null && aiEnt.remaining <= 0
   const aiNearLimit = aiEnt.limit !== null && aiEnt.remaining > 0
                       && aiEnt.remaining <= Math.ceil((aiEnt.limit || 1) * 0.1)

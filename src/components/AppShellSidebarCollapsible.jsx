@@ -13,6 +13,7 @@ import { useAuth } from "../auth/AuthProvider"
 import { ROLES } from "../auth/roles"
 import { getCurrentUser, hasRole } from "../auth/session"
 import client, { apiOrigin } from "../api/client"
+import GlobalSearchBar from "./GlobalSearchBar"
 
 const PROFILE_ROLES = [ROLES.EDITOR]
 
@@ -331,6 +332,28 @@ export default function AppShellSidebarCollapsible() {
   const [open, setOpen] = useState(false)
   const isDesktop = useBreakpointValue({ base: false, lg: true })
   const [, forceUpdate] = useReducer(x => x + 1, 0)
+
+  const handleSearch = ({ q, types }) => {
+    // Construye SIEMPRE un QS nuevo (no reutilices el de window.location)
+    const sp = new URLSearchParams();
+
+    // Texto
+    if (q && q.trim()) sp.set('q', q.trim());
+
+    // Tipos: si viene vacío => Everything (NO poner "type" en el QS)
+    if (Array.isArray(types) && types.length > 0) {
+      types.forEach(t => sp.append('type', t));
+    }
+
+    // Reinicia otros filtros y la paginación
+    // (NO añadas from, to, tag, label aquí a menos que sea intencional)
+    sp.set('page', '1');
+
+    // Navega (push) a resultados
+    navigate(`/app/search?${sp.toString()}`);
+  };
+
+
   useEffect(() => {
     const uid = deriveUid();
     if (!uid) return; // sin token aún
@@ -433,6 +456,11 @@ export default function AppShellSidebarCollapsible() {
           <Text fontWeight="semibold">Evaluación Psicológica Integral</Text>
           <Box />
         </HStack>
+        <Box position="relative" zIndex="dropdown" overflow="visible">
+  <GlobalSearchBar  position="relative" overflow="visible" zIndex="dropdown"
+  onSearch={handleSearch}
+  />
+</Box>
         <Box as="main" p={{ base: 4, md: 6 }} overflow="auto">
           <Outlet />
         </Box>

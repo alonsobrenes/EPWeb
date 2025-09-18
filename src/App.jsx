@@ -8,6 +8,7 @@ import SignupBlock from "./pages/SignupBlock"
 import Landing from "./pages/Landing"
 import Forbidden from "./pages/Forbidden"
 import Pricing from "./pages/Pricing"
+import SearchResultsPage from "./pages/search/SearchResultsPage"
 import AppShellSidebarCollapsible from "./components/AppShellSidebarCollapsible"
 import ErrorBoundary from "./components/ErrorBoundary"
 import { ROLES } from "./auth/roles"
@@ -46,7 +47,14 @@ export default function App() {
       ),
       children: [
         { index: true, element: <Dashboard /> },
-
+        {
+          path: "search",
+          element: (
+            <Suspense fallback={Fallback}>
+              <SearchResultsPage />
+            </Suspense>
+          ),
+        },
         // Perfil (cualquier autenticado)
         {
           path: "perfil",
