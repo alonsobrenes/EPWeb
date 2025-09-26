@@ -47,9 +47,29 @@ function closeSuggestPanel() {
   try { window.dispatchEvent(new CustomEvent('global-search:close-suggest')) } catch {}
 }
 
+// BEGIN CHANGE: usar navegación SPA dentro de la fila
 function ResultRow({ r, onTagClick, onLabelClick }) {
+  const navigate = useNavigate()
   const labels = Array.isArray(r.labels) ? r.labels : []
   const tags = Array.isArray(r.hashtags) ? r.hashtags : []
+
+  const openResult = (e) => {
+    try {
+      e?.preventDefault?.()
+      closeSuggestPanel()
+      const url = r.url || ''
+      // Internas: navegar con react-router (mejor UX, sin recarga completa)
+      if (url.startsWith('/')) {
+        navigate(url)
+      } else if (url) {
+        // Externas (por si en el futuro aparece alguna): degradar sin romper
+        window.location.assign(url)
+      }
+    } catch {
+      // noop: si algo falla, no rompemos UI
+    }
+  }
+
   return (
     <Table.Row>
       <Table.Cell>
@@ -92,12 +112,10 @@ function ResultRow({ r, onTagClick, onLabelClick }) {
         {r.updatedAt && <Text fontSize="sm">{new Date(r.updatedAt).toLocaleString()}</Text>}
         {r.url && (
           <Button
-            as="a"
-            href={r.url}
             size="xs"
             variant="outline"
             mt="2"
-            onClick={closeSuggestPanel}
+            onClick={openResult}
           >
             Abrir
           </Button>
@@ -106,6 +124,7 @@ function ResultRow({ r, onTagClick, onLabelClick }) {
     </Table.Row>
   )
 }
+// END CHANGE
 
 export default function SearchResultsPage() {
   const navigate = useNavigate()
@@ -171,7 +190,6 @@ export default function SearchResultsPage() {
         list = list.filter(it => it.type === entityType && (!entityId || String(it.id) === String(entityId)))
         count = list.length
       }
-
       setItems(list)
       setTotal(count)
     } catch (e) {

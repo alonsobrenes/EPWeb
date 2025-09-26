@@ -125,7 +125,6 @@ async upsertAttemptAiOpinion(attemptId, payload = {}) {
  },
  // src/api/clinicianApi.js
 generateAttemptAiOpinion(attemptId, body = {}) {
-  console.log(body)
   return client.post(`/clinician/attempts/${attemptId}/ai-opinion/auto`, body).then(r => r.data)
 }
 

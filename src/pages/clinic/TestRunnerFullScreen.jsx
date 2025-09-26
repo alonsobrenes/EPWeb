@@ -10,6 +10,7 @@ import ClinicianApi from '../../api/clinicianApi'
 import client from '../../api/client'
 import { useNavigate } from 'react-router-dom'
 import { useBillingStatus, pickEntitlement } from '../../hooks/useBilling'
+import TestProfileChart from "../../components/tests/TestProfileChart"
 
 // Helpers
 function getErrorMessage(error) {
@@ -692,6 +693,11 @@ export default function TestRunnerFullScreen({ open, onClose, test, patient, ass
             </Table.Body>
           </Table.Root>
         </Box>
+        {Array.isArray(scales) && scales.length > 0 && (
+          <Box mt="4">
+            <TestProfileChart scales={scales} />
+          </Box>
+        )}
 
         {/* Opinión IA */}
         <Box mt="6" borderWidth="1px" rounded="md" p="3" position="relative">
@@ -734,7 +740,7 @@ export default function TestRunnerFullScreen({ open, onClose, test, patient, ass
             <Button onClick={saveAiOpinion} isLoading={savingAi} disabled={loadingAi || !attemptIdAuto}>Guardar</Button>
           </HStack>
         </Box>
-
+        
         <HStack justify="flex-end" mt="4">
           <Button onClick={onClose}>Cerrar</Button>
         </HStack>

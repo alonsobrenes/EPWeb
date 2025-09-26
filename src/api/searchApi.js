@@ -7,7 +7,6 @@ export const SearchApi = {
   },
 
   async search(body) {
-    console.log(body)
     // body: { q, types, labels, hashtags, dateFromUtc, dateToUtc, page, pageSize }
     const { data } = await client.post("/search", body)
     return data

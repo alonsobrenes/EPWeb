@@ -78,7 +78,6 @@ async getById(id) {
   async getQuestions(id) {
     // Run-first con fallback a admin (compat)
     try {
-      console.log(`/tests/${id}/questions-run`)
       const { data } = await client.get(`/tests/${id}/questions-run`)
       return data
     } catch (err) {
@@ -93,7 +92,6 @@ async getById(id) {
 
   // Alias para llamadas que esperen explícitamente el endpoint “-run”
   async getQuestionsRun(id) {
-    console.log("ZZZZ")
     return this.getQuestions(id)
   },
 
@@ -171,6 +169,44 @@ async getById(id) {
     };
 
     const res = await client.post('/test-runs/submit', body, {
+      headers: { 'Content-Type': 'application/json' },
+      // Si tu acción espera un wrapper { dto: { ... } } (no suele hacer falta),
+      // cambia la línea anterior por: api.post('/api/test-runs/submit', { dto: body }, { ... })
+    });
+    return res.data;
+  },
+  async getRun(dto) {
+    // dto esperado: { testId, patientId, startedAtUtc, finishedAtUtc, answers: [...] }
+
+    // NORMALIZAMOS TIPOS:
+    const body = {
+      testId: dto.testId,
+      patientId: dto.patientId,
+      startedAtUtc: dto.startedAtUtc,
+      finishedAtUtc: dto.finishedAtUtc,
+      answers: (dto.answers || []).map(a => {
+        // a puede venir como { questionId, value, values, answerText }
+        const out = { questionId: a.questionId };
+
+        // open text
+        if (a.answerText != null) out.answerText = String(a.answerText);
+
+        // single
+        if (a.value != null && a.values == null) {
+          // el endpoint espera string, no number
+          out.value = String(a.value);
+        }
+
+        // multi
+        if (Array.isArray(a.values)) {
+          out.values = a.values.map(v => String(v));
+        }
+
+        return out;
+      }),
+    };
+
+    const res = await client.post('/test-runs/submit-readonly', body, {
       headers: { 'Content-Type': 'application/json' },
       // Si tu acción espera un wrapper { dto: { ... } } (no suele hacer falta),
       // cambia la línea anterior por: api.post('/api/test-runs/submit', { dto: body }, { ... })
