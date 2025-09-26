@@ -27,11 +27,11 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
   const [q, setQ] = useState('')
-
+  const autoOpenedRef = useRef(false)
   // Standalone modal state
   const [isOpen, setOpen] = useState(false)
   const cancelRef = useRef(null)
-
+  const didInitForKey = useRef(null);
   // Editor state
   const [editing, setEditing] = useState(null) // dto or null (new)
   const [title, setTitle] = useState('')
@@ -42,7 +42,10 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
   const [paywalled, setPaywalled] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Hashtags (modal) — editable
+  const [autoOpenId, setAutoOpenId] = useState(autoOpenSessionId)
+  useEffect(() => {
+    setAutoOpenId(autoOpenSessionId)
+  }, [autoOpenSessionId])
   const [sessionTags, setSessionTags] = useState([])
   const [loadingTags, setLoadingTags] = useState(false)
   const [savingTagsSession, setSavingTagsSession] = useState(false)
@@ -135,8 +138,13 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     } catch { setAllLabels([]) }
   }, [])
 
-  const load = useCallback(async () => {
+
+  const load = useCallback(async (force = false) => {
     if (!patientId) return
+    const key = String(patientId || '');
+    if (!force && didInitForKey.current === key) return;
+    didInitForKey.current = key;
+
     try {
       setLoading(true)
       const res = await SessionsApi.listByPatient(patientId, { skip: 0, take: 200, search: q })
@@ -161,7 +169,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     }
   }, [patientId, q, allLabels.length, fetchOrgLabels])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(false) }, [load])
 
   const openNew = async () => {
     setEditing(null)
@@ -176,7 +184,6 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     await loadAiQuota()
   }
 
-  const autoOpenedRef = useRef(false)
 
   const openEdit = async (s) => {
     let base = s
@@ -207,6 +214,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
   }
 
   const closeModal = () => {
+    setAutoOpenId(null)
     setOpen(false)
     setEditing(null)
     setTitle('')
@@ -219,6 +227,15 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     setSaving(false)
     setSavingTagsSession(false)
     setNewTagSession('')
+    didInitForKey.current = null;
+    try {
+       const u = new URL(window.location.href)
+      if (u.searchParams.has('session_id')) {
+        u.searchParams.delete('session_id')
+        window.history.replaceState({}, '', u.pathname + u.search)
+      }
+     } catch {}
+     autoOpenedRef.current = true
   }
 
   // Guardar (crear o actualizar)
@@ -231,10 +248,25 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
         await loadSessionHashtags(editing.id)
       } else {
         const dto = await SessionsApi.create(patientId, { title: title.trim(), contentText })
+        const ids = Array.from(assigned)
+        if (ids.length) {
+          setLabelsSaving(true)
+          try {
+            await Promise.allSettled(ids.map(id => SessionsApi.assignLabel(dto.id, id)))
+            // reflejar en tabla
+            const mine = allLabels.filter(l => ids.includes(l.id))
+            setLabelsBySession(prev => {
+              const map = new Map(prev); map.set(dto.id, mine); return map
+            })
+          } finally {
+            setLabelsSaving(false)
+          }
+        }
         if (dto?.id) await loadSessionHashtags(dto.id)
         setEditing(dto)
       }
-      await load()
+      // ⬇️ Forzar recarga antes de cerrar, para que la tabla se actualice de inmediato
+      await load(true)
       toaster.success({ title: 'Sesión guardada' })
       closeModal()
     } catch (e) {
@@ -253,7 +285,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     }
     const dto = await SessionsApi.create(patientId, { title: title.trim(), contentText })
     setEditing(dto)
-    await load()
+    await load(true)
     return dto
   }, [editing, title, contentText, patientId, load])
 
@@ -263,7 +295,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
       const s = await ensureSessionExists()
       const dto = await SessionsApi.aiTidy(patientId, s.id, null)
       setAiTidyText(dto?.aiTidyText || dto?.ai_tidy_text || '')
-      await load()
+      await load(true)
       toaster.success({ title: 'Texto ordenado (IA) guardado' })
       await loadAiQuota()
       await loadSessionHashtags(s.id)
@@ -281,7 +313,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
       const s = await ensureSessionExists()
       const dto = await SessionsApi.aiOpinion(patientId, s.id, null)
       setAiOpinionText(dto?.aiOpinionText || dto?.ai_opinion_text || '')
-      await load()
+      await load(true)
       toaster.success({ title: 'Opinión IA guardada' })
       await loadAiQuota()
       await loadSessionHashtags(s.id)
@@ -295,34 +327,51 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
 
   // Etiquetas dentro del modal
   const toggleLabel = async (lbl) => {
-    if (!editing?.id) {
-      toaster.error({ title: 'Guarda o crea la sesión antes de asignar etiquetas' })
-      return
-    }
+    const hasId = !!editing?.id
     const isOn = assigned.has(lbl.id)
+
+    // 1) Siempre reflejar en UI local:
+    setAssigned(prev => {
+      const next = new Set(prev)
+      if (isOn) next.delete(lbl.id); else next.add(lbl.id)
+      return next
+    })
+
+    // 2) Si no existe sesión todavía, no llamamos a la API (se hará post-creación)
+    if (!hasId) return
+
     try {
       setLabelsSaving(true)
       if (isOn) {
         await SessionsApi.unassignLabel(editing.id, lbl.id)
-        const next = new Set(assigned); next.delete(lbl.id); setAssigned(next)
+        // reflejar en la lista
+        setLabelsBySession(prev => {
+          const arr = [...(prev.get(editing.id) || [])]
+          const idx = arr.findIndex(x => x.id === lbl.id)
+          if (idx >= 0) arr.splice(idx, 1)
+          const map = new Map(prev); map.set(editing.id, arr); return map
+        })
       } else {
         await SessionsApi.assignLabel(editing.id, lbl.id)
-        const next = new Set(assigned); next.add(lbl.id); setAssigned(next)
+        setLabelsBySession(prev => {
+          const arr = [...(prev.get(editing.id) || [])]
+          if (!arr.some(x => x.id === lbl.id)) arr.push(lbl)
+          const map = new Map(prev); map.set(editing.id, arr); return map
+        })
       }
-      // reflejar en la lista
-      setLabelsBySession(prev => {
-        const arr = [...(prev.get(editing.id) || [])]
-        const idx = arr.findIndex(x => x.id === lbl.id)
-        if (isOn && idx >= 0) arr.splice(idx,1)
-        if (!isOn && idx < 0) arr.push(lbl)
-        const map = new Map(prev); map.set(editing.id, arr); return map
-      })
     } catch (e) {
+      // Revert UI si falló
+      setAssigned(prev => {
+        const next = new Set(prev)
+        if (isOn) next.add(lbl.id); else next.delete(lbl.id)
+        return next
+      })
       toaster.error({ title: isOn ? 'No se pudo quitar etiqueta' : 'No se pudo asignar etiqueta', description: e?.message || 'Error' })
     } finally {
       setLabelsSaving(false)
     }
   }
+
 
   // Eliminar
   const onDelete = async (row) => {
@@ -331,7 +380,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     try {
       setBusyId(sessionId)
       await SessionsApi.remove(patientId, sessionId)
-      await load()
+      await load(true)
       toaster.success({ title: 'Sesión eliminada' })
     } catch (e) {
       toaster.error({ title: 'No se pudo eliminar', description: e?.message || 'Error' })
@@ -420,19 +469,33 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     )
   }
 
- useEffect(() => {
-  if (!autoOpenSessionId || autoOpenedRef.current || items.length === 0) return
-  const id = String(autoOpenSessionId).toLowerCase()
-  const target = items.find(s => String(s.id ?? s.sessionId ?? s.session_id).toLowerCase() === id)
-  if (target) { autoOpenedRef.current = true; openEdit(target) }
-}, [autoOpenSessionId, items])
+  useEffect(() => {
+    if (!autoOpenId || autoOpenedRef.current || items.length === 0) return
+    const id = String(autoOpenId).toLowerCase()
+    const target = items.find(s => String(s.id ?? s.sessionId ?? s.session_id).toLowerCase() === id)
+
+    if (target) {
+      setBusyId(id)
+      autoOpenedRef.current = true;
+      openEdit(target);
+      try {
+        const u = new URL(window.location.href)
+        if (u.searchParams.get('session_id')?.toLowerCase() === id) {
+          u.searchParams.delete('session_id')
+          window.history.replaceState({}, '', u.pathname + u.search)
+        }
+      } catch {}
+      setAutoOpenId(null)
+      setBusyId(null)
+    }
+  }, [autoOpenId, items])
 
   return (
     <VStack align="stretch" gap="3">
       <HStack justify="space-between" wrap="wrap" gap="2">
         <HStack gap="2">
           <Input placeholder="Buscar…" value={q} onChange={(e) => setQ(e.target.value)} minW="220px" />
-          <Button onClick={load} variant="subtle">Actualizar</Button>
+          <Button onClick={() => load(true)} variant="subtle">Actualizar</Button>
         </HStack>
         <HStack gap="2">
           <Button onClick={openNew} colorPalette="brand">Nueva sesión</Button>
@@ -448,9 +511,9 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
             <Table.Header position="sticky" top="0" bg="bg" zIndex="1">
               <Table.Row>
                 <Table.ColumnHeader minW="240px">Título</Table.ColumnHeader>
-                <Table.ColumnHeader minW="110px" textAlign="center">Etiq.</Table.ColumnHeader>
                 <Table.ColumnHeader minW="200px">Fecha</Table.ColumnHeader>
                 <Table.ColumnHeader minW="200px">Actualizado</Table.ColumnHeader>
+                <Table.ColumnHeader minW="110px" textAlign="center">Etiquetas</Table.ColumnHeader>
                 <Table.ColumnHeader minW="140px" textAlign="right">Acciones</Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
@@ -463,9 +526,9 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                 filteredItems.map(s => (
                   <Table.Row key={s.id}>
                     <Table.Cell><Text fontWeight="semibold">{s.title}</Text></Table.Cell>
-                    <Table.Cell textAlign="center">{renderSwatches(s.id)}</Table.Cell>
                     <Table.Cell>{s.createdAtUtc ? new Date(s.createdAtUtc).toLocaleString() : '—'}</Table.Cell>
                     <Table.Cell>{s.updatedAtUtc ? new Date(s.updatedAtUtc).toLocaleString() : '—'}</Table.Cell>
+                    <Table.Cell textAlign="center">{renderSwatches(s.id)}</Table.Cell>
                     <Table.Cell>
                       <HStack justify="flex-end" gap="1">
                         <IconButton size="xs" variant="ghost" aria-label="Editar" title="Editar" onClick={() => openEdit(s)}>
@@ -518,42 +581,45 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                 <VStack align="stretch" gap="3">
                   <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la sesión" />
 
-                  {/* Etiquetas (solo cuando hay id) */}
-                  {editing?.id && (
-                    <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
-                      <HStack justify="space-between">
-                        <Text fontWeight="medium">Etiquetas</Text>
-                        {labelsLoading && <HStack><Spinner size="sm" /><Text textStyle="sm">Cargando…</Text></HStack>}
-                      </HStack>
-                      {allLabels.length === 0 ? (
-                        <Text color="fg.muted">No hay etiquetas en la organización.</Text>
-                      ) : (
-                        <Wrap spacing="2">
-                          {allLabels.map(lbl => {
-                            const active = assigned.has(lbl.id)
-                            return (
-                              <WrapItem key={lbl.id}>
-                                <Button
-                                  size="xs"
-                                  variant={active ? 'solid' : 'outline'}
-                                  onClick={() => toggleLabel(lbl)}
-                                  isDisabled={labelsSaving}
-                                  style={{
-                                    borderColor: lbl.colorHex,
-                                    background: active ? lbl.colorHex : 'transparent',
-                                    color: active ? '#fff' : 'inherit'
-                                  }}
-                                  title={lbl.name}
-                                >
-                                  {lbl.code}
-                                </Button>
-                              </WrapItem>
-                            )
-                          })}
-                        </Wrap>
-                      )}
-                    </VStack>
-                  )}
+                  {/* Etiquetas (permitir preselección en nueva sesión) */}
+                  <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
+                    <HStack justify="space-between">
+                      <Text fontWeight="medium">Etiquetas</Text>
+                      {labelsLoading && <HStack><Spinner size="sm" /><Text textStyle="sm">Cargando…</Text></HStack>}
+                    </HStack>
+                    {allLabels.length === 0 ? (
+                      <Text color="fg.muted">No hay etiquetas en la organización.</Text>
+                    ) : (
+                      <Wrap spacing="2">
+                        {allLabels.map(lbl => {
+                          const active = assigned.has(lbl.id)
+                          return (
+                            <WrapItem key={lbl.id}>
+                              <Button
+                                size="xs"
+                                variant={active ? 'solid' : 'outline'}
+                                onClick={() => toggleLabel(lbl)}
+                                isDisabled={labelsSaving}
+                                style={{
+                                  borderColor: lbl.colorHex,
+                                  background: active ? lbl.colorHex : 'transparent',
+                                  color: active ? '#fff' : 'inherit'
+                                }}
+                                title={lbl.name}
+                              >
+                                {lbl.code}
+                              </Button>
+                            </WrapItem>
+                          )
+                        })}
+                      </Wrap>
+                    )}
+                    {!editing?.id && (
+                      <Text textStyle="xs" color="fg.muted">
+                        Se asignarán al crear la sesión.
+                      </Text>
+                    )}
+                  </VStack>
 
                   <Textarea
                     value={contentText}

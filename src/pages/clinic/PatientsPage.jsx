@@ -11,7 +11,6 @@ import PatientDialog from './PatientDialog'
 import { toaster } from '../../components/ui/toaster'
 import { Tip } from '../../components/ui/tooltip'
 
-
 function getErrorMessage(error) {
   const data = error?.response?.data
   if (typeof data === 'string') return data
@@ -40,6 +39,11 @@ export default function PatientsPage() {
   const [pageSize, setPageSize] = useState(25)
   const [total, setTotal] = useState(0)
 
+  // 🔹 sort: estado de orden
+  // columnas: identification | name | sex | contact | status | updated
+  const [sortBy, setSortBy] = useState('updated')
+  const [sortDir, setSortDir] = useState('desc') // asc | desc
+
   // modales (botones)
   const [formOpen, setFormOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -62,11 +66,9 @@ export default function PatientsPage() {
   )
 
   // si viene openPatientId y NO closeDialog=1, abrimos el diálogo
-  //const openFromUrl = !!qsOpenId && !qsCloseDialog
   const openFromUrl = !!qsOpenId && !qsCloseDialog && !loading && !!fromUrlRow
   const dialogIsOpen = formOpen || openFromUrl
 
-  // initial values/tab del diálogo
   const dialogInitialValues = formOpen ? (selectedRow || undefined) : (fromUrlRow || undefined)
   const dialogInitialTab = formOpen ? 'datos' : qsTab
 
@@ -102,14 +104,12 @@ export default function PatientsPage() {
     }
   }
 
-  //useEffect(() => { load() }, []) // init
   useEffect(() => { load({ keepSelection: true }) }, [page, pageSize, activeFilter]) // eslint-disable-line
 
   const onNew = () => { setSelectedId(null); setFormOpen(true) }
   const onEdit = () => { if (selectedId) setFormOpen(true) }
   const onDelete = () => { if (selectedId) setDeleteOpen(true) }
 
-  // ⬇⬇⬇  🟢 FALTA QUE PROVOCÓ EL ERROR: onSubmitForm  ⬇⬇⬇
   async function onSubmitForm(payload) {
     try {
       if (selectedRow) {
@@ -129,7 +129,6 @@ export default function PatientsPage() {
       toaster.error({ title: 'Error al guardar', description: msg })
     }
   }
-  // ⬆⬆⬆  🟢 FIN onSubmitForm  ⬆⬆⬆
 
   async function confirmDelete() {
     try {
@@ -150,6 +149,30 @@ export default function PatientsPage() {
     }
   }
 
+  // 🔹 sort: función para obtener llave de orden
+  const valueGetter = useMemo(() => ({
+    identification: (r) => (r.identificationNumber || '').toString().toLowerCase(),
+    name:          (r) => fullName(r).toLowerCase(),
+    sex:           (r) => (r.sex || '').toString().toLowerCase(),
+    contact:       (r) => `${r.contactEmail || ''} ${r.contactPhone || ''}`.toLowerCase(),
+    status:        (r) => (r.isActive ? 1 : 0),
+    updated:       (r) => new Date(r.updatedAt || r.createdAt).getTime() || 0,
+  }), [])
+
+  // 🔹 sort: computar filas ordenadas (no muta rows)
+  const sortedRows = useMemo(() => {
+    const arr = [...rows]
+    const get = valueGetter[sortBy] || valueGetter.updated
+    arr.sort((a, b) => {
+      const va = get(a)
+      const vb = get(b)
+      if (va < vb) return sortDir === 'asc' ? -1 : 1
+      if (va > vb) return sortDir === 'asc' ?  1 : -1
+      return 0
+    })
+    return arr
+  }, [rows, sortBy, sortDir, valueGetter])
+
   // pie de tabla
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1
@@ -161,6 +184,32 @@ export default function PatientsPage() {
       borderLeft: '1px solid',
       borderColor: 'blackAlpha.200',
     },
+  }
+
+  function handleSort(col) {
+  const isSame = sortBy === col;
+  const nextSortBy  = col;
+  const nextSortDir = isSame ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+
+  setSortBy(nextSortBy);
+  setSortDir(nextSortDir);
+}
+
+
+  // 🔹 sort: helper para dibujar indicador ▲▼
+  function SortableHeader({ col, children, minW }) {
+    const isActive = sortBy === col
+    const arrow = !isActive ? '' : (sortDir === 'asc' ? ' ▲' : ' ▼')
+    return (
+      <Table.ColumnHeader
+        minW={minW}
+        onClick={() => handleSort(col)}
+        _hover={{ bg: 'gray.50', cursor: 'pointer' }}
+        userSelect="none"
+      >
+        {children}{arrow}
+      </Table.ColumnHeader>
+    )
   }
 
   return (
@@ -238,12 +287,12 @@ export default function PatientsPage() {
         <Table.Root size="sm" variant="outline" sx={columnDividerSx}>
           <Table.Header>
             <Table.Row>
-              <Table.ColumnHeader minW="160px">Identificación</Table.ColumnHeader>
-              <Table.ColumnHeader>Nombre</Table.ColumnHeader>
-              <Table.ColumnHeader minW="120px">Sexo</Table.ColumnHeader>
-              <Table.ColumnHeader minW="140px">Contacto</Table.ColumnHeader>
-              <Table.ColumnHeader minW="100px">Estado</Table.ColumnHeader>
-              <Table.ColumnHeader minW="220px">Actualización</Table.ColumnHeader>
+              <SortableHeader col="identification" minW="160px">Identificación</SortableHeader>
+              <SortableHeader col="name">Nombre</SortableHeader>
+              <SortableHeader col="sex" minW="120px">Sexo</SortableHeader>
+              <SortableHeader col="contact" minW="140px">Contacto</SortableHeader>
+              <SortableHeader col="status" minW="100px">Estado</SortableHeader>
+              <SortableHeader col="updated" minW="220px">Actualización</SortableHeader>
             </Table.Row>
           </Table.Header>
 
@@ -256,14 +305,14 @@ export default function PatientsPage() {
                   </HStack>
                 </Table.Cell>
               </Table.Row>
-            ) : rows.length === 0 ? (
+            ) : sortedRows.length === 0 ? (
               <Table.Row>
                 <Table.Cell colSpan={6}>
                   <Box py="6" textAlign="center" color="fg.muted">Sin resultados</Box>
                 </Table.Cell>
               </Table.Row>
             ) : (
-              rows.map((r) => {
+              sortedRows.map((r) => {
                 const isSelected = r.id === selectedId
                 return (
                   <Table.Row

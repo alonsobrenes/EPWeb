@@ -1,15 +1,117 @@
 // ===============================
 // src/pages/clinic/ReviewSimpleReadOnly.jsx
 // ===============================
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useCallback } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import {
-  Box, Card, HStack, VStack, Heading, Text, Button,
+  Box, Card, HStack, VStack, Heading, Text, Button, Wrap, WrapItem,
   Spinner, Badge, Table
 } from "@chakra-ui/react"
 import ClinicianApi from "../../api/clinicianApi"
 import { TestsApi } from "../../api/testsApi"
 import { toaster } from "../../components/ui/toaster"
+import TestProfileChart from "../../components/tests/TestProfileChart"
+import { ProfileApi } from '../../api/profileApi'
+
+function TestAttemptLabelsSection({ patientId, attemptId }) {
+  const [allLabels, setAllLabels] = useState([])
+  const [assigned, setAssigned] = useState(new Set())
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    // Si no hay patientId (caso "Nuevo paciente"), apaga el loading y no muestres nada
+    if (!patientId) {
+      setAllLabels([])
+      setAssigned(new Set())
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    try {
+      const labelsResp = await ProfileApi.getLabels()
+      const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
+      setAllLabels(all)
+
+      const assignedResp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
+      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      setAssigned(new Set(mine.map(x => x.id)))
+    } catch (e) {
+      toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
+      // En caso de error, no bloquees la UI
+      setAllLabels([])
+      setAssigned(new Set())
+    } finally {
+      setLoading(false)
+    }
+  }, [patientId])
+
+  useEffect(() => { load() }, [load])
+
+  const toggleLabel = async (lbl) => {
+    if (!patientId) return
+    const isOn = assigned.has(lbl.id)
+    try {
+      setSaving(true)
+      if (isOn) {
+        await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'test_attempt', targetId: attemptId })
+        const next = new Set(assigned); next.delete(lbl.id); setAssigned(next)
+      } else {
+        await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'test_attempt', targetId: attemptId })
+        const next = new Set(assigned); next.add(lbl.id); setAssigned(next)
+      }
+    } catch (e) {
+      toaster.error({ title: isOn ? 'No se pudo quitar etiqueta' : 'No se pudo asignar etiqueta', description: e?.message || 'Error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Reglas de visibilidad:
+  // - Mientras carga y HAY patientId => muestra spinner en línea.
+  // - Si ya no carga y no hay etiquetas => no muestres nada (oculta toda la sección).
+  if (!loading && allLabels.length === 0) {
+    return null
+  }
+
+  return (
+    <Box ml="6" mt="6">
+      <HStack justify="space-between" mb="2">
+        <Text fontWeight="medium">Etiquetas del Test</Text>
+        {patientId && loading && (
+          <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
+        )}
+      </HStack>
+
+      {allLabels.length > 0 && (
+        <Wrap spacing="2">
+          {allLabels.map(lbl => {
+            const active = assigned.has(lbl.id)
+            return (
+              <WrapItem key={lbl.id}>
+                <Button
+                  size="xs"
+                  variant={active ? 'solid' : 'outline'}
+                  onClick={() => toggleLabel(lbl)}
+                  isDisabled={saving || lbl.isSystem === true}
+                  style={{
+                    borderColor: lbl.colorHex,
+                    background: active ? lbl.colorHex : 'transparent',
+                    color: active ? '#fff' : 'inherit'
+                  }}
+                  title={lbl.name}
+                >
+                  {lbl.code}
+                </Button>
+              </WrapItem>
+            )
+          })}
+        </Wrap>
+      )}
+    </Box>
+  )
+}
 
 function normalizeType(qtRaw) {
   const t = String(qtRaw || "").toLowerCase().trim()
@@ -69,25 +171,12 @@ function toDisplayAnswer(a) {
   return v == null ? "" : String(v)
 }
 
-
-
 // ===== Fallback local para calcular resultados por escalas =====
-// Objetivo: restaurar el comportamiento previo y hacerlo más robusto sin romper nada.
-// - Usa s.items si está presente (forma antigua que funcionaba)
-// - Acepta variantes: scaleItems, itemIds/itemsIds, questionIds/question_ids
-// - Si no hay items y es IPA (45 q / 15 escalas), aplica triadas (1,16,31…)
-// - Si no hay metadatos por ítem, asume Likert 1–4 para min/max
-
-// ===== Fallback local para calcular resultados por escalas (robusto y retrocompatible) =====
-// ===== Fallback EXÁCTO para calcular resultados por escalas =====
-// Usar *tal cual* en lugar de la versión actual.
 async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
-  // 1) Traer escalas con items (preguntas por escala)
   const sw = await ClinicianApi.getScalesWithItems(effectiveTestId)
   const scales = Array.isArray(sw?.scales) ? sw.scales : []
   const qById = new Map(questions.map(q => [q.id, q]))
 
-  // Helpers numéricos seguros
   const toNum = (v) => {
     if (v == null) return null
     if (typeof v === 'number' && Number.isFinite(v)) return v
@@ -96,13 +185,11 @@ async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
     return null
   }
 
-  // Min/Max por pregunta a partir de opciones (si no hay, se infiere por tipo)
   function getQMinMax(q) {
     const opts = Array.isArray(q.options) ? q.options : []
     const nums = opts.map(o => toNum(o.value)).filter(n => n != null)
 
     if (q.type === 'multi') {
-      // multi: min 0, max = suma de valores positivos únicos
       const pos = nums.filter(n => n > 0)
       const max = pos.reduce((a, b) => a + b, 0)
       return { min: 0, max: max || 0 }
@@ -112,64 +199,51 @@ async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
       return { min: Math.min(...nums), max: Math.max(...nums) }
     }
 
-    // Likert inferido por rawType (si quedó algo en rawType con rango)
     const spec = parseLikertSpec(q.rawType || '')
     if (spec) return { min: spec.start, max: spec.end }
 
-    // Sí/No sin opciones
     const t = (q.rawType || '').toLowerCase()
     if (t === 'yesno' || t === 'yes-no' || t === 'yes_no' || t === 'yn' || t === 'bool' || t === 'boolean') {
       return { min: 0, max: 1 }
     }
 
-    // Triadas sin valores: asumimos 3 categorías equiespaciadas 1..3
     if ((q.type === 'single' || q.type === 'multi') && (opts.length === 3 || t.includes('triad'))) {
       return { min: 1, max: 3 }
     }
 
-    // Último recurso: 1..4 (no debería ocurrir si ya construimos opciones arriba)
     return { min: 1, max: 4 }
   }
 
-  // Valor numérico de la respuesta de una pregunta
   function getAnswerNumeric(q) {
     const ans = answersByQ[q.id] || {}
 
-    // SINGLE
     if (q.type === 'single') {
-      // intento directo con value
       const nv = toNum(ans.value)
       if (nv != null) return nv
 
-      // mapear por label → value
       if (ans.text && Array.isArray(q.options)) {
         const opt = q.options.find(o => String(o.label) === String(ans.text))
         const nv2 = toNum(opt?.value)
         if (nv2 != null) return nv2
       }
 
-      // mapear por value string → opción
       if (ans.value != null && Array.isArray(q.options)) {
         const opt = q.options.find(o => String(o.value) === String(ans.value))
         const nv3 = toNum(opt?.value)
         if (nv3 != null) return nv3
       }
 
-      // sin dato: devolver null (se contará como min)
       return null
     }
 
-    // MULTI → suma de valores seleccionados
     if (q.type === 'multi') {
-      // vector ya normalizado
       let values = Array.isArray(ans.values) ? ans.values.slice() : []
-      // o JSON crudo
       if (!values.length && typeof ans.answerValuesJson === 'string') {
         try { const tmp = JSON.parse(ans.answerValuesJson); if (Array.isArray(tmp)) values = tmp } catch {}
       }
 
       if (!values.length) return 0
-      const set = new Set(values.map(v => String(v))) // para deduplicar
+      const set = new Set(values.map(v => String(v)))
 
       let sum = 0
       for (const opt of (q.options || [])) {
@@ -182,11 +256,9 @@ async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
       return sum
     }
 
-    // OPEN → sin puntaje
     return 0
   }
 
-  // 2) Recorrer escalas y acumular con min/max exactos por ítem
   const outScales = []
   let totalRaw = 0, totalMin = 0, totalMax = 0
 
@@ -200,8 +272,6 @@ async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
 
       const mm = getQMinMax(q)
       const val = getAnswerNumeric(q)
-
-      // si no hay respuesta, tomar el mínimo de la pregunta
       const use = (val == null ? mm.min : val)
 
       raw += use
@@ -237,10 +307,14 @@ export default function ReviewSimpleReadOnly() {
   const { attemptId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-console.log("XXXX")
+
   const qs = new URLSearchParams(location.search)
   const testIdQS = qs.get("testId") || location.state?.testId || null
   const testName = location.state?.testName || null
+  const backTo = qs.get('backTo');
+
+  const url = new URL(backTo, window.location.origin); // El segundo parámetro es la base
+  const patientId = url.searchParams.get('openPatientId');
 
   const [loading, setLoading] = useState(true)
   const [meta, setMeta] = useState(null)
@@ -248,12 +322,10 @@ console.log("XXXX")
   const [answersByQ, setAnswersByQ] = useState({})
   const [result, setResult] = useState(null)
 
-  // Opinión de IA
   const [aiText, setAiText] = useState("")
   const [loadingAi, setLoadingAi] = useState(true)
   const [savingAi, setSavingAi] = useState(false)
-
-  // Borde vertical utilitario
+  const [allLabels, setAllLabels] = useState([])
   const colBorder = { borderLeftWidth: "1px", borderLeftColor: "blackAlpha.200" }
 
   const optionColumns = useMemo(() => {
@@ -355,7 +427,6 @@ console.log("XXXX")
         }
         setAnswersByQ(map)
 
-        // Cargar opinión de IA (no bloquea)
         try {
           const ai = await ClinicianApi.getAttemptAiOpinion(attemptId)
           const text = ai?.opinionText || ai?.text || ""
@@ -363,7 +434,6 @@ console.log("XXXX")
         } catch {}
         finally { setLoadingAi(false) }
 
-        // ==== RECÁLCULO (server) con tolerancia y Fallback local ====
         try {
           const built = norm.map(q => {
             const r = map[q.id] || {}
@@ -379,7 +449,7 @@ console.log("XXXX")
 
           const nowIso = new Date().toISOString()
           const effPid = m?.patientId || qs.get("patientId") || location.state?.patientId || null
-          const res = await TestsApi.submitRun({
+          const res = await TestsApi.getRun({
             testId: effectiveTestId,
             patientId: effPid,
             startedAtUtc: m?.startedAtUtc ?? nowIso,
@@ -387,28 +457,22 @@ console.log("XXXX")
             answers: built,
           })
           if (!alive) return
-          // Logs para depurar el submit
-          console.log('[submitRun] answers sample', built.slice(0,3))
-          console.log('[submitRun] server scales', Array.isArray(res?.scales) ? res.scales.map(s => ({code:s.code, min:s.min, max:s.max, raw:s.raw})) : res?.scales)
 
           const invalid = !res || !Array.isArray(res.scales) || res.scales.length === 0 ||
                           res.scales.every(s => Number(s.min) === 0 && Number(s.max) === 0)
 
           if (invalid) {
-            console.log('[fallback] submitRun devolvió escalas inválidas; recalculando en cliente')
             const fk = await computeResultsFallback(effectiveTestId, norm, map, res?.scales || null)
             setResult(fk || null)
           } else {
             setResult(res || null)
           }
         } catch (e) {
-          console.log("No se pudieron recalcular resultados para lectura (usando Fallback local)", e)
           try {
             const fk = await computeResultsFallback(effectiveTestId, norm, map)
             if (!alive) return
             setResult(fk)
           } catch (inner) {
-            console.warn("Fallback local también falló:", inner)
             setResult(null)
           }
         }
@@ -466,7 +530,7 @@ console.log("XXXX")
             {totalPercent != null && <Text><b>Total %:</b> {Number(totalPercent).toFixed(2)}%</Text>}
           </Box>
         )}
-        <Box borderWidth="1px" rounded="md" overflow="hidden">
+        <Box borderWidth="1px" rounded="md" overflow="hidden" mb="4">
           <Table.Root size="sm" variant="outline">
             <Table.Header>
               <Table.Row>
@@ -496,6 +560,11 @@ console.log("XXXX")
             </Table.Body>
           </Table.Root>
         </Box>
+        {Array.isArray(scales) && scales.length > 0 && (
+          <Box mt="4">
+            <TestProfileChart scales={scales} />
+          </Box>
+        )}
       </Box>
     )
   }
@@ -522,13 +591,12 @@ console.log("XXXX")
             <Heading size="sm">Vista de intento — {testName || "Evaluación"}</Heading>
             <Badge variant="subtle">{meta?.status}</Badge>
           </HStack>
-          {/* ← SIN state extra ni closeDialog */}
           <Button onClick={() => navigate(goBackHref, { replace: true })}>
             Volver
           </Button>
         </HStack>
       </Card.Root>
-
+<TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
       <Card.Root p="4">
         {isTriads ? (
           <Box borderWidth="1px" rounded="md" overflow="auto">
@@ -632,9 +700,6 @@ console.log("XXXX")
                     readOnly
                   />
                 </Box>
-                {/* <HStack justify="end" mt="12px">
-                  <Button onClick={saveAiOpinion} isLoading={savingAi} disabled={loadingAi}>Guardar</Button>
-                </HStack> */}
               </Table.Cell>
             </Table.Row>
           </Table.Body>

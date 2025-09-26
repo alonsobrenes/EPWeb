@@ -274,15 +274,8 @@ function PatientAttachmentsTab({ patientId, highlightAttachmentId }) {
   const [paywall, setPaywall] = useState(false)
   const [ownershipError, setOwnershipError] = useState(false)
 
-  const rowRef = useRef(null)
-  useEffect(() => {
-    if (!highlightAttachmentId) return
-    // cuando items cambian, intentamos hacer scroll a la fila resaltada
-    const found = items.some(it => String(it.fileId ?? it.id) === String(highlightAttachmentId))
-    if (found && rowRef.current) {
-      try { rowRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch {}
-    }
-  }, [items, highlightAttachmentId])
+  const rowRefAttachments = useRef(null)
+  
 
   const sumUsedBytes = (arr) =>
     (arr || []).reduce((acc, it) => acc + (Number(it.size ?? it.byteSize ?? 0) || 0), 0)
@@ -560,7 +553,7 @@ return (
 
               return (
                 <Table.Row key={fileId}
-                   ref={ String(fileId) === String(highlightAttachmentId) ? rowRef : undefined }
+                   ref={ String(fileId) === String(highlightAttachmentId) ? rowRefAttachments : undefined }
                    style={ String(fileId) === String(highlightAttachmentId)
                           ? { outline: '2px solid var(--chakra-colors-blue-500)', background: 'var(--chakra-colors-blue-50)' }
                           : undefined }
@@ -644,18 +637,60 @@ return (
 
 
 // ====================== Historial del paciente ======================
-function PatientHistory({ patientId, patientName, onClose }) {
+ function PatientHistory({ patientId, patientName, onClose, highlightAttemptId = null }) {  
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
   const [downloadingId, setDownloadingId] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
+  const [allLabels, setAllLabels] = useState([])
+  const [labelsByAttempt, setLabelsByAttempt] = useState(new Map())
+  const rowRefAttempts = useRef(null)
+  const fetchOrgLabels = useCallback(async () => {
+  try {
+    const resp = await ProfileApi.getLabels()
+    const arr = Array.isArray(resp?.items) ? resp.items : []
+    setAllLabels(arr)
+  } catch {
+    setAllLabels([])
+  }
+  }, [])
+
+  useEffect(() => { fetchOrgLabels() }, [fetchOrgLabels])
+
+
+  //const rowRef = useRef(null)
 
   async function fetchItems() {
     try {
       setLoading(true)
       const data = await ClinicianApi.listAssessmentsByPatient(patientId)
-      setItems(data?.items || [])
+      const arr = data?.items || []
+      setItems(arr)
+
+      try
+        {
+            const pairs = await Promise.all((arr || []).map(async (it) => {
+            const attemptId = it.attemptId ?? it.attempt_id ?? it.id
+              if (!attemptId) return [null, new Set()]
+              try
+            {
+                const resp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
+            const mine = Array.isArray(resp?.items) ? resp.items : []
+            return [attemptId, new Set(mine.map(x => x.id))]
+          }
+        catch
+        {
+            return [attemptId, new Set()]
+          }
+    }))
+        setLabelsByAttempt(new Map(pairs.filter(([k]) => !!k)))
+      } catch {
+        setLabelsByAttempt(new Map())
+      }
+      // cargar etiquetas para las filas traídas
+      //await loadAttemptLabels(arr)
+
     } catch (e) {
       toaster.error({ title: 'No se pudo cargar el historial', description: e?.message || 'Error' })
     } finally {
@@ -663,13 +698,23 @@ function PatientHistory({ patientId, patientName, onClose }) {
     }
   }
 
-  useEffect(() => {
-    if (!patientId) { setLoading(false); return }
-    let alive = true
-    ;(async () => { await fetchItems() })()
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patientId])
+  useEffect(() => { 
+  fetchItems() 
+}, [patientId])
+
+useEffect(() => {
+    if (!highlightAttemptId) return
+
+    const found = items.some(it => String(it.attemptId) === String(highlightAttemptId))
+
+    if (found) {
+      try {
+        const item = items.filter(it => String(it.attemptId) === String(highlightAttemptId))[0];
+        openRow(item);
+        rowRefAttempts.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch {}
+    }
+  }, [items, highlightAttemptId])
 
   function openRow(row) {
     const status    = String(row.status || row.attemptStatus || "").toLowerCase()
@@ -698,6 +743,7 @@ function PatientHistory({ patientId, patientName, onClose }) {
     }
   }
 
+
   // --- helpers locales para normalizar tipos/opciones (igual que en review) ---
 function normalizeType(qtRaw) {
   const t = String(qtRaw || '').toLowerCase().trim()
@@ -709,6 +755,7 @@ function normalizeType(qtRaw) {
   if (t === 'likert' || t.startsWith('likert')) return 'single'
   return 'open'
 }
+
 function parseLikertSpec(rawType) {
   const t = String(rawType || '').toLowerCase().trim()
   if (!t.startsWith('likert')) return null
@@ -782,7 +829,6 @@ async function downloadRow(row) {
     if (isSacks || scoring === 'clinician') {
       // ---- SACKS: necesitamos grupos/ítems para el orden y los títulos ----
       const scWrap = await ClinicianApi.getScalesWithItems(testId) // {scales:[{name,code,items:[{id,code,text}]}]}
-      console.log(scWrap)
       const scales = scWrap?.scales || []
       const sections = scales.map(sc => ({
         code: sc.code || '',
@@ -921,6 +967,41 @@ async function downloadRow(row) {
     }
   }
 
+  const renderSwatches = (attemptId) => {
+    const ids = labelsByAttempt.get(attemptId) || new Set()
+    if (!ids.size) return <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
+
+    const list = Array.from(ids)
+      .map(id => allLabels.find(l => l.id === id))
+      .filter(Boolean)
+
+    return (
+      <div style={{
+        display: 'flex',
+        gap: 6,
+        justifyContent: 'center',
+        alignItems: 'center',
+        maxWidth: 120,
+        margin: '0 auto'
+      }}>
+        {list.map(lbl => (
+          <span
+            key={lbl.id}
+            title={`${lbl.code} — ${lbl.name}`}
+            style={{
+              width: 12, height: 12, minWidth: 12, minHeight: 12,
+              borderRadius: 4,
+              border: `2px solid ${lbl.colorHex}`,
+              background: lbl.colorHex
+            }}
+          />
+        ))}
+      </div>
+    )
+  }
+
+   
+
   return (
     <VStack align="stretch" gap="3">
       <HStack justify="space-between">
@@ -935,21 +1016,22 @@ async function downloadRow(row) {
           <Table.Row>
             <Table.ColumnHeader minW="180px">Fecha</Table.ColumnHeader>
             <Table.ColumnHeader minW="260px">Test</Table.ColumnHeader>
-            <Table.ColumnHeader minW="120px">Tipo</Table.ColumnHeader>
-            <Table.ColumnHeader minW="120px">Estado</Table.ColumnHeader>
-            <Table.ColumnHeader minW="220px" textAlign="right">Acción</Table.ColumnHeader>
+            <Table.ColumnHeader minW="110px">Tipo</Table.ColumnHeader>
+            <Table.ColumnHeader minW="110px">Estado</Table.ColumnHeader>
+            <Table.ColumnHeader minW="80px">Etiquetas</Table.ColumnHeader>
+            <Table.ColumnHeader minW="120px" textAlign="right">Acción</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
         <Table.Body>
           {loading ? (
             <Table.Row>
-              <Table.Cell colSpan={5}>
+              <Table.Cell colSpan={6}>
                 <Text color="fg.muted" py="4">Cargando…</Text>
               </Table.Cell>
             </Table.Row>
           ) : items.length === 0 ? (
             <Table.Row>
-              <Table.Cell colSpan={5}>
+              <Table.Cell colSpan={6}>
                 <Text color="fg.muted" py="4">Sin evaluaciones registradas.</Text>
               </Table.Cell>
             </Table.Row>
@@ -965,7 +1047,12 @@ async function downloadRow(row) {
               const attemptId = r.attemptId ?? r.attempt_id ?? r.id
 
               return (
-                <Table.Row key={attemptId}>
+                <Table.Row key={attemptId}
+                  ref={ String(attemptId) === String(highlightAttemptId) ? rowRefAttempts : undefined }
+                   style={ String(attemptId) === String(highlightAttemptId)
+                          ? { outline: '2px solid var(--chakra-colors-blue-500)', background: 'var(--chakra-colors-blue-50)' }
+                          : undefined }
+                >
                   <Table.Cell>{new Date(dateText).toLocaleString()}</Table.Cell>
                   <Table.Cell>{testName}</Table.Cell>
                   <Table.Cell>
@@ -975,6 +1062,9 @@ async function downloadRow(row) {
                     <Badge variant={isFinal ? 'solid' : 'outline'} colorPalette={isFinal ? 'green' : 'gray'}>
                       {isFinal ? 'Finalizado' : 'Borrador'}
                     </Badge>
+                  </Table.Cell>
+                   <Table.Cell textAlign="center">
+                    {renderSwatches(attemptId)}
                   </Table.Cell>
                   <Table.Cell>
                     <HStack justify="flex-end" gap="1">
@@ -1048,7 +1138,25 @@ export default function PatientDialog({
   const params = new URLSearchParams(location.search)
   const routerTab = location.state?.tab ?? params.get('tab') ?? null
   const computedInitialTab = initialTab || routerTab || 'datos'
-  const innerIdFromQS = params.get('id') || null
+
+  const qsSessionId = params.get('session_id') || null
+  const qsAttachmentId  = params.get('attachment_id') || null
+  const qsAttemptId  = params.get('attempt_id') || null
+
+  const [innerSessionId, setInnerSessionId] = useState(qsSessionId)
+  useEffect(() => {
+    setInnerSessionId(qsSessionId)
+  }, [qsSessionId])
+
+  const [innerAttachmentId, setInnerAttachmentId] = useState(qsAttachmentId)
+  useEffect(() => {
+    setInnerAttachmentId(qsAttachmentId)
+  }, [qsAttachmentId])
+
+  const [innerAttemptId, setInnerAttemptId] = useState(qsAttemptId)
+  useEffect(() => {
+    setInnerAttemptId(qsAttemptId)
+  }, [qsAttemptId])
 
   const EMPTY_FORM = {
     identificationType: 'cedula',
@@ -1067,8 +1175,7 @@ export default function PatientDialog({
   const [tabValue, setTabValue] = useState(computedInitialTab)
   useEffect(() => { setTabValue(computedInitialTab) }, [computedInitialTab])
   const [form, setForm] = useState(EMPTY_FORM);
-//   console.log("X")
-// console.log(tabValue)
+
   useEffect(() => {
     if (initialValues) {
       setForm({
@@ -1086,8 +1193,52 @@ export default function PatientDialog({
     } else {
       setForm(EMPTY_FORM);
     }
-    setTabValue( tabValue || 'datos');
   }, [isOpen, initialValues])
+
+  useEffect(() => {
+    if (!open) return
+    if (tabValue !== 'sess') {
+    if (innerSessionId !== null) setInnerSessionId(null)
+      return
+    }
+    if (innerSessionId == null) return
+
+    const u = new URL(window.location.href)
+    if (u.searchParams.get('session_id')?.toLowerCase() === innerSessionId) {
+      u.searchParams.delete('session_id')
+      window.history.replaceState({}, '', u.pathname + u.search)
+    }
+    }, [open, tabValue, params,innerSessionId])
+
+    useEffect(() => {
+    if (!open) return
+    if (tabValue !== 'adj') {
+    if (innerAttachmentId !== null) setInnerAttachmentId(null)
+      return
+    }
+    if (innerAttachmentId == null) return
+
+    const u = new URL(window.location.href)
+    if (u.searchParams.get('attachment_id')?.toLowerCase() === innerAttachmentId) {
+      u.searchParams.delete('attachment_id')
+      window.history.replaceState({}, '', u.pathname + u.search)
+    }
+    }, [open, tabValue, params,innerAttachmentId])
+
+    useEffect(() => {
+    if (!open) return
+    if (tabValue !== 'hist') {
+    if (innerAttemptId !== null) setInnerAttemptId(null)
+      return
+    }
+    if (innerAttemptId == null) return
+
+    const u = new URL(window.location.href)
+    if (u.searchParams.get('attempt_id')?.toLowerCase() === innerAttemptId) {
+      u.searchParams.delete('attempt_id')
+      window.history.replaceState({}, '', u.pathname + u.search)
+    }
+    }, [open, tabValue, params,innerAttemptId])
 
   const change = (k, v) => setForm((prev) => ({ ...prev, [k]: v }))
 
@@ -1143,7 +1294,7 @@ export default function PatientDialog({
             </Dialog.Header>
             <PatientLabelsSection patientId={patientId} />
             {/* El body crece y hace scroll interno */}
-            <Dialog.Body flex="1" overflowY="auto" minH={0}>
+            <Dialog.Body flex="1" overflowY="hidden" minH={0}>
               <Tabs.Root
                 value={tabValue}
                 onValueChange={(e) => setTabValue(e.value)}  // <-- importante
@@ -1268,15 +1419,16 @@ export default function PatientDialog({
                     <PatientHistory
                       patientId={patientId}
                       patientName={patientName}
+                      highlightAttemptId={innerAttemptId}
                       onClose={onClose}
                     />
                   </Tabs.Content>
 
                  <Tabs.Content value="adj">
-                    <PatientAttachmentsTab patientId={patientId} highlightAttachmentId={innerIdFromQS}/>
+                    <PatientAttachmentsTab patientId={patientId} highlightAttachmentId={innerAttachmentId}/>
                 </Tabs.Content>
                 <Tabs.Content value="sess">
-                <PatientSessionsTab patientId={patientId} patientName={patientName} autoOpenSessionId={innerIdFromQS} />
+                <PatientSessionsTab patientId={patientId} patientName={patientName} autoOpenSessionId={innerSessionId} />
       </Tabs.Content>
                 </VStack>
               </Tabs.Root>
@@ -1294,3 +1446,4 @@ export default function PatientDialog({
     </Dialog.Root>
   )
 }
+
