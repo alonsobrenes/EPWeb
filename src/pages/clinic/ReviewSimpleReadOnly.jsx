@@ -76,9 +76,9 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
   }
 
   return (
-    <Box ml="6" mt="6">
+    <Box mb="2">
       <HStack justify="space-between" mb="2">
-        <Text fontWeight="medium">Etiquetas del Test</Text>
+        <Text fontWeight="medium">Etiquetas de esta evaluación</Text>
         {patientId && loading && (
           <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
         )}
@@ -596,7 +596,9 @@ export default function ReviewSimpleReadOnly() {
           </Button>
         </HStack>
       </Card.Root>
-<TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
+      <Card.Root p="4">
+      <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
+      </Card.Root>
       <Card.Root p="4">
         {isTriads ? (
           <Box borderWidth="1px" rounded="md" overflow="auto">

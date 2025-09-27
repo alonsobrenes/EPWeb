@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState, useCallback, memo } from "react"
 import { useNavigate, useParams, useLocation } from "react-router-dom"
 import {
   Box, Card, HStack, VStack, Text, Heading, Button, Badge,
-  Separator, Textarea, Spinner,
+  Separator, Textarea, Spinner, Wrap, WrapItem
 } from "@chakra-ui/react"
 import ClinicianApi from "../../api/clinicianApi"
 import { toaster } from "../../components/ui/toaster"
 import { useBillingStatus, pickEntitlement } from "../../hooks/useBilling"
+import { ProfileApi } from "../../api/profileApi"
 
 import { LuCheck, LuSave } from "react-icons/lu"
 
@@ -134,6 +135,98 @@ function toDisplayAnswer(a) {
   return ""
 }
 
+// ================== Sección de etiquetas para este intento ==================
+function TestAttemptLabelsSection({ patientId, attemptId }) {
+  const [allLabels, setAllLabels] = useState([])
+  const [assigned, setAssigned] = useState(new Set())
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!patientId) {
+      setAllLabels([])
+      setAssigned(new Set())
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    try {
+      const labelsResp = await ProfileApi.getLabels()
+      const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
+      setAllLabels(all)
+      const assignedResp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
+      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      setAssigned(new Set(mine.map(x => x.id)))
+    } catch (e) {
+      toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
+      setAllLabels([])
+      setAssigned(new Set())
+    } finally {
+      setLoading(false)
+    }
+  }, [patientId, attemptId])
+
+  useEffect(() => { load() }, [load])
+
+  const toggleLabel = async (lbl) => {
+    if (!patientId) return
+    const isOn = assigned.has(lbl.id)
+    try {
+      setSaving(true)
+      if (isOn) {
+        await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'test_attempt', targetId: attemptId })
+        const next = new Set(assigned); next.delete(lbl.id); setAssigned(next)
+      } else {
+        await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'test_attempt', targetId: attemptId })
+        const next = new Set(assigned); next.add(lbl.id); setAssigned(next)
+      }
+    } catch (e) {
+      toaster.error({ title: isOn ? 'No se pudo quitar etiqueta' : 'No se pudo asignar etiqueta', description: e?.message || 'Error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!loading && allLabels.length === 0) return null
+
+  return (
+    <Box mb="2">
+      <HStack justify="space-between" mb="2">
+        <Text fontWeight="medium">Etiquetas de esta evaluación</Text>
+        {patientId && loading && (
+          <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
+        )}
+      </HStack>
+
+      {allLabels.length > 0 && (
+        <Wrap spacing="2">
+          {allLabels.map(lbl => {
+            const active = assigned.has(lbl.id)
+            return (
+              <WrapItem key={lbl.id}>
+                <Button
+                  size="xs"
+                  variant={active ? 'solid' : 'outline'}
+                  onClick={() => toggleLabel(lbl)}
+                  isDisabled={saving || lbl.isSystem === true}
+                  style={{
+                    borderColor: lbl.colorHex,
+                    background: active ? lbl.colorHex : 'transparent',
+                    color: active ? '#fff' : 'inherit'
+                  }}
+                  title={lbl.name}
+                >
+                  {lbl.code}
+                </Button>
+              </WrapItem>
+            )
+          })}
+        </Wrap>
+      )}
+    </Box>
+  )
+}
+
 export default function ReviewSacksPage() {
   const { attemptId } = useParams()
   const location = useLocation()
@@ -161,6 +254,21 @@ export default function ReviewSacksPage() {
   const [loadingAi, setLoadingAi] = useState(false)
   const [testName, setTestName] = useState(location.state?.testName || null)
   const testIdFromQS = new URLSearchParams(location.search).get("testId") || location.state?.testId || null
+
+  const backToQS = new URLSearchParams(location.search).get("backTo") || null
+  const queryParams = new URLSearchParams(window.location.search);
+
+  let patientId = null
+
+  if (backToQS) {
+    try {
+      const url = new URL(backToQS, window.location.origin)
+      patientId = url.searchParams.get("patientId")
+    } catch(err) {console.log(err)}
+  }
+  else{
+    patientId = queryParams.get('patientId');
+  }
 
   const [sum, setSum] = useState({
     areasConflicto: "", interrelacion: "", estructura: "",
@@ -363,6 +471,11 @@ export default function ReviewSacksPage() {
           )}
         </>
       )}
+
+      {/* Etiquetas (ANTES de respuestas) */}
+      <Card.Root p="4">
+        <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
+      </Card.Root>
 
       {/* Escalas */}
       <Card.Root p="4">
