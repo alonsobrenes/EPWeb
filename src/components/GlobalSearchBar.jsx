@@ -15,7 +15,7 @@ const ALL_TYPES = [
 ]
 
 function summarizeTypes(sel) {
-  if (sel.size === 0 || sel.size === ALL_TYPES.length) return 'Everything'
+  if (sel.size === 0 || sel.size === ALL_TYPES.length) return 'Todo'
   return [...sel].map(k => ALL_TYPES.find(t => t.key === k)?.label || k).join(', ')
 }
 
@@ -92,8 +92,8 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
           setSug(data || { hashtags: [], labels: [], entities: [], durationMs: 0 })
           setShowSug(true)
         }
-      } catch {
-      } finally {
+      } catch {}
+      finally {
         if (myId === reqIdRef.current) setBusy(false)
       }
     }, 200)
@@ -105,6 +105,14 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
     suppressSuggestRef.current = false
     setQ(e.target.value)
   }
+
+  // total de sugerencias (no lo renderizamos como número cuando es 0)
+  const totalSuggest = useMemo(() => {
+    const h = Array.isArray(sug?.hashtags) ? sug.hashtags.length : 0
+    const l = Array.isArray(sug?.labels) ? sug.labels.length : 0
+    const e = Array.isArray(sug?.entities) ? sug.entities.length : 0
+    return h + l + e
+  }, [sug])
 
   // navega a /app/search creando QS limpio
   const navigateToResults = ({ qText, types, etype, eid }) => {
@@ -143,9 +151,6 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
     inputRef.current?.blur()
 
     const qText = (qOverride ?? q)?.trim()
-
-    // 👇 OJO: NO limitamos "type" hacia el backend para evitar desalineaciones,
-    //        mandamos marcadores etype/eid y filtramos client-side en la página.
     const types = [] // Everything
     runSoon(() => navigateToResults({ qText, types, etype: typeOverride, eid: entityId }))
   }
@@ -164,7 +169,7 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
   const allKeys = ALL_TYPES.map(t => t.key)
 
   return (
-    <HStack gap="10px" align="stretch" position="relative" padding={6}>
+    <HStack ml="25%" gap="10px" align="stretch" position="relative" padding={5}>
       <Input
         ref={inputRef}
         placeholder="Busca por texto, #hashtag, label:code…"
@@ -193,7 +198,7 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
             p="10px"
           >
             <VStack align="stretch" gap="10px">
-              <Text fontWeight="medium">Search:</Text>
+              <Text fontWeight="medium">Buscar:</Text>
 
               <Button
                 size="sm"
@@ -201,7 +206,7 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
                 onClick={() => setSelTypes(new Set(allKeys))}
                 justifyContent="flex-start"
               >
-                Everything
+                Todo
               </Button>
 
               <VStack align="stretch" gap="8px">
@@ -239,9 +244,19 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
         )}
       </Box>
 
-      <Button onClick={runSearch} colorPalette="brand">Search</Button>
+      {/* Botón Buscar + Badge contextual */}
+      <HStack>
+        <Button onClick={runSearch} colorPalette="brand">
+          Buscar
+        </Button>
+        {q.trim().length >= 2 && showSug && !busy && (
+          <Badge variant="subtle" colorPalette="gray">
+            {totalSuggest === 0 ? 'Sin Resultados' : /* NO mostrar número si lo hubiera */ ' '}
+          </Badge>
+        )}
+      </HStack>
 
-      {showSug && (busy || sug.hashtags.length || sug.labels.length || sug.entities.length) && (
+      {showSug && (busy || sug.hashtags.length > 0 || sug.labels.length > 0 || sug.entities.length > 0) && (
         <Box
           position="absolute"
           top="calc(100% + 6px)"
@@ -323,7 +338,6 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
                     onClick={() => {
                       const v = e.title || ''
                       setQ(v)
-                      // 👇 Everything al backend, y envío etype/eid para filtrar client-side
                       runSearchWith({ qOverride: v, typeOverride: e.type, entityId: e.id })
                     }}
                   >

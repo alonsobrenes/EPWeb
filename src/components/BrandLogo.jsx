@@ -1,13 +1,13 @@
 import React from "react"
 import { Box } from "@chakra-ui/react"
-import logoUrl from "../assets/logo.svg" // Vite importa SVG como URL
+import logoUrl from "../assets/Logo-AlfaDoc.png" // Vite importa SVG como URL
 
-export default function BrandLogo({ height = "40px", ...props }) {
+export default function BrandLogo({ height = "120px", ...props }) {
   return (
     <Box
       as="img"
       src={logoUrl}
-      alt="Evaluación Psicológica Integral"
+      alt="Alfa-Doc"
       height={height}
       // para que no se estire raro
       maxW="100%"
