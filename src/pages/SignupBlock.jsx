@@ -1,8 +1,8 @@
 // src/pages/SignupBlock.jsx
-import React, { useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { useNavigate, useLocation, Link as RouterLink } from "react-router-dom"
 import { useAuth } from "../auth/AuthProvider"
-import api from "../api/client" // ← corrige la ruta del client
+import api from "../api/client"
 import { validateSignup, getPasswordStrength } from "../auth/authHelpers"
 import { toaster } from "../components/ui/toaster"
 
@@ -37,9 +37,26 @@ export default function SignupBlock() {
   const navigate = useNavigate()
   const location = useLocation()
 
+  // BEGIN CHANGE: lectura de token/email desde la invitación y locking del email
+  const qs = new URLSearchParams(location.search)
+  const inviteToken = qs.get("token") || null
+  const inviteEmail = (qs.get("email") || "").trim().toLowerCase() || null
+  const [emailLocked, setEmailLocked] = useState(false)
+
+  useEffect(() => {
+    if (inviteEmail) {
+      setEmail(inviteEmail)
+      setEmailLocked(true)
+    }
+  }, [inviteEmail])
+  // END CHANGE
+
   // Si venías de una ruta protegida, vuelve ahí; si no, ve a /app
+  // BEGIN CHANGE: si hay token de invitación, redirige a /invite/accept para completar unión
   const fromPath = location.state?.from?.pathname
-  const redirectTo = typeof fromPath === "string" ? fromPath : "/app"
+  const defaultRedirect = typeof fromPath === "string" ? fromPath : "/app"
+  const redirectTo = inviteToken ? `/invite/accept?token=${encodeURIComponent(inviteToken)}` : defaultRedirect
+  // END CHANGE
 
   const resetErrors = () => {
     setFormError(""); setEmailError(""); setPasswordError(""); setConfirmError("")
@@ -51,8 +68,18 @@ export default function SignupBlock() {
     e.preventDefault()
     resetErrors()
 
+    const cleanEmail = email.trim().toLowerCase()
+
+    // BEGIN CHANGE: si viene email en invitación, debe coincidir con el ingresado
+    if (inviteEmail && cleanEmail !== inviteEmail) {
+      setEmailError("Este correo no coincide con la invitación")
+      emailRef.current?.focus()
+      return
+    }
+    // END CHANGE
+
     const { errors, isValid, firstInvalid } = validateSignup({
-      email, password, confirmPassword, enforceComplexity: true,
+      email: cleanEmail, password, confirmPassword, enforceComplexity: true,
     })
 
     setEmailError(errors.email || "")
@@ -68,7 +95,6 @@ export default function SignupBlock() {
 
     try {
       setSubmitting(true)
-      const cleanEmail = email.trim().toLowerCase()
 
       // 1) Crear usuario
       const res = await api.post("/Auth/signup", { email: cleanEmail, password })
@@ -101,14 +127,14 @@ export default function SignupBlock() {
       if (loginToken) {
         login(loginToken)
         toaster.success({ title: "Cuenta creada", description: "Sesión iniciada" })
-        navigate(redirectTo, { replace: true }) // ← antes iba a "/"
+        navigate(redirectTo, { replace: true })
         return
       }
 
       toaster.success({ title: "Cuenta creada", description: "Inicia sesión para continuar" })
       navigate("/login", {
         replace: true,
-        state: { from: { pathname: redirectTo } }, // guarda intención original
+        state: { from: { pathname: redirectTo } },
       })
     } catch (err) {
       const status = err?.response?.status
@@ -137,7 +163,9 @@ export default function SignupBlock() {
 
             <Stack gap={{ base: "2", md: "3" }} textAlign="center">
               <Heading size={{ base: "2xl", md: "3xl" }}>Crear cuenta</Heading>
-              <Text color="fg.muted">Únete a evaluacionpsicologica.org</Text>
+              <Text color="fg.muted">
+                {inviteToken ? "Estás aceptando una invitación a una organización" : "Únete a evaluacionpsicologica.org"}
+              </Text>
             </Stack>
 
             {formError && (
@@ -167,8 +195,17 @@ export default function SignupBlock() {
                       aria-invalid={!!emailError}
                       aria-describedby={emailError ? "email-error" : undefined}
                       required
+                      // BEGIN CHANGE: bloquear si viene desde invitación
+                      readOnly={emailLocked}
+                      disabled={emailLocked}
+                      // END CHANGE
                     />
                   </InputGroup>
+                  {emailLocked && (
+                    <Text textStyle="sm" color="fg.muted" mt="1">
+                      Este correo proviene de una invitación y no puede modificarse.
+                    </Text>
+                  )}
                   {emailError && <Field.ErrorText id="email-error">{emailError}</Field.ErrorText>}
                 </Field.Root>
 

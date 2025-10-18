@@ -13,6 +13,8 @@ export function AuthProvider({ children }) {
   const logout = () => {
     setToken(null)
     localStorage.removeItem(AUTH_TOKEN_KEY)
+    sessionStorage.removeItem(AUTH_TOKEN_KEY) // si lo usas
+    localStorage.removeItem('ep:profile:*')
   }
 
   return (
