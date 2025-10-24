@@ -32,6 +32,7 @@ function extractRolesFromPayload(p) {
 }
 function isAdminLike() {
   const roles = extractRolesFromPayload(decodeJwtPayload());
+  console.log(roles)
   return ["admin","owner","manager"].some(r => roles.has(r));
 }
 

@@ -2,12 +2,14 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   Dialog, Portal, Button, HStack, VStack, Text, Heading, Avatar,
-  Tabs, Box, Wrap, WrapItem, Spinner, Grid, GridItem, Table, Input, Badge, IconButton
+  Tabs, Box, Wrap, WrapItem, Spinner, Grid, GridItem,
+  Table, Badge, Input, IconButton
 } from "@chakra-ui/react"
 import { toaster } from "../../components/ui/toaster"
-import { LuExternalLink, LuDownload } from 'react-icons/lu'
 import { ProfileApi } from "../../api/profileApi"
-import client from "../../api/client" // default import (tu módulo no exporta named 'client')
+import { PatientsApi } from "../../api/patientsApi"
+import PatientDialog from "./PatientDialog"
+import { LuExternalLink } from "react-icons/lu"
 
 function initialsFromEmail(email) {
   if (!email) return "U"
@@ -18,7 +20,7 @@ function initialsFromEmail(email) {
   return (a + b || a || "U").toUpperCase()
 }
 
-/** Sección de etiquetas (mismo patrón que PatientDialog) */
+/** Sección de etiquetas (igual a la validada antes) */
 function ProfessionalLabelsSection({ professionalId }) {
   const [allLabels, setAllLabels] = useState([])
   const [assigned, setAssigned] = useState(new Set())
@@ -37,16 +39,14 @@ function ProfessionalLabelsSection({ professionalId }) {
           }
           return
         }
-        // 1) Todas las etiquetas disponibles
         const labelsResp = await ProfileApi.getLabels()
         const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
         if (!cancelled) setAllLabels(all)
 
-        // 2) Etiquetas asignadas al profesional
         const assignedResp = await ProfileApi.getLabelsFor({ type: "professional", id: String(professionalId) })
         const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
         if (!cancelled) setAssigned(new Set(mine.map(x => x.id)))
-      } catch (e) {
+      } catch {
         if (!cancelled) toaster.error({ title: "No se pudieron cargar las etiquetas" })
       } finally {
         if (!cancelled) setLoading(false)
@@ -118,118 +118,219 @@ function ProfessionalLabelsSection({ professionalId }) {
   )
 }
 
-/**
- * ProfessionalDialog
- * Props:
- *  - isOpen: boolean
- *  - onClose: () => void
- *  - userId?: number       // id INT del profesional (preferido para "professional")
- *  - userGuid?: string     // opcional; backend también lo acepta
- *  - initialUser?: object  // fila seleccionada desde ProfessionalsPage
- */
-export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, initialUser }) {
+export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, initialUser, initialTab = "datos", initialPatientIdToOpen, initialPatientTab }) {
+  // const location = useLocation()
+  // const navigate = useNavigate()
+  // const didCleanRef = useRef(false)
+
   const [user, setUser] = useState(null)
-  const [tabValue, setTabValue] = useState("datos")
-  const [labelsSubjectId, setLabelsSubjectId] = useState(null) // GUID o INT (string)
+  const [tabValue, setTabValue] = useState(initialTab)
+  const [labelsSubjectId, setLabelsSubjectId] = useState(null)
+  // Estado del Tab Pacientes
+  const [patients, setPatients] = useState([])
+  const [loadingPatients, setLoadingPatients] = useState(false)
+  const [selectedPatientId, setSelectedPatientId] = useState(null)
+  const [patientDialogOpen, setPatientDialogOpen] = useState(false)
 
-  // entrevistas (listado)
-  const [interviews, setInterviews] = useState([])
-  const [loadingInterviews, setLoadingInterviews] = useState(false)
-  const [errorInterviews, setErrorInterviews] = useState(null)
-
-  // orden y filtro (client-side)
-  const [ivSortField, setIvSortField] = useState("startedAtUtc") // 'patientName' | 'status' | 'startedAtUtc' | 'endedAtUtc' | 'durationMs'
-  const [ivSortDir, setIvSortDir] = useState("desc")             // 'asc' | 'desc'
-  const [ivFilterQ, setIvFilterQ] = useState("")
+  // Filtro local y ordenamiento
+  const [q, setQ] = useState("")
+  const [sortKey, setSortKey] = useState("name") // 'id' | 'name' | 'sex' | 'contact' | 'status' | 'updated'
+  const [sortDir, setSortDir] = useState("asc")  // 'asc' | 'desc'
 
   const initials = useMemo(() => initialsFromEmail(user?.email), [user])
 
+  const clinicianUserId = useMemo(() => {
+    if (typeof userId === 'number') return userId
+    if (typeof initialUser?.userId === 'number') return initialUser.userId
+    if (typeof initialUser?.id === 'number') return initialUser.id
+    return null
+  }, [userId, initialUser])
+
+  const backToForPatient = useMemo(() => {
+    if (clinicianUserId == null) return null
+    // Deep link de profesionales con el tab "pacientes" activo
+    return `/app/clinic/profesionales?openProfessionalId=${clinicianUserId}&tab=pacientes`
+  }, [clinicianUserId])
+
+  useEffect(() => {
+    if (isOpen) return
+    // diálogo está cerrándose/cerrado → limpiar todo el estado volátil
+    setTabValue("datos")
+    setPatientDialogOpen(false)
+    setSelectedPatientId(null)
+    setQ("")
+    setSortKey("name")
+    setSortDir("asc")
+    setPatients([])
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
-    setTabValue("datos")
     setUser(initialUser || null)
+    setTabValue(initialTab || "datos")
 
     const guidFromRow = initialUser?.userGuid ?? initialUser?.uid ?? initialUser?.guid ?? null
     const idFromRow = initialUser?.userId ?? initialUser?.id ?? null
     const chosen = userGuid || guidFromRow || (idFromRow != null ? String(idFromRow) : null)
     setLabelsSubjectId(chosen ?? (userId != null ? String(userId) : null))
-  }, [isOpen, initialUser, userGuid, userId])
+  }, [isOpen, initialUser, userGuid, userId, initialTab])
 
-  // Cargar entrevistas al activar el tab
+  // Cargar pacientes del profesional cuando el Tab "pacientes" se activa
   useEffect(() => {
-    let cancelled = false
-    async function loadInterviews() {
-      if (!isOpen || tabValue !== "entrevistas" || !userId) return
-      setLoadingInterviews(true)
-      setErrorInterviews(null)
-      try {
-        const { data } = await client.get("/clinician/interviews/by-clinician", { params: { UserId: userId } })
-        if (!cancelled) {
-          setInterviews(Array.isArray(data?.items) ? data.items : [])
-        }
-      } catch (err) {
-        if (!cancelled) setErrorInterviews(err)
-        toaster.error({ title: "No se pudieron cargar las entrevistas" })
-      } finally {
-        if (!cancelled) setLoadingInterviews(false)
-      }
-    }
-    loadInterviews()
-    return () => { cancelled = true }
-  }, [isOpen, tabValue, userId])
+    // ✅ Evitar toasts y fetches indebidos al deseleccionar en ProfessionalsPage
+    if (!isOpen) return
+    if (tabValue !== 'pacientes') return
 
-  // Orden + filtro (cliente)
-  const visibleInterviews = useMemo(() => {
-    const q = ivFilterQ.trim().toLowerCase()
-    let list = interviews
-    if (q) {
-      list = list.filter(iv => (iv.patientName || "").toLowerCase().includes(q))
+    if (clinicianUserId == null) {
+      setPatients([])
+      return
     }
-    const dir = ivSortDir === "asc" ? 1 : -1
-    const field = ivSortField
-    const sorted = [...list].sort((a, b) => {
-      const av = a?.[field]
-      const bv = b?.[field]
-      // fechas numéricas para comparar
-      const toTime = (v) => (v ? new Date(v).getTime() : 0)
-      if (field === "startedAtUtc" || field === "endedAtUtc") {
-        const aa = toTime(av), bb = toTime(bv)
-        if (aa < bb) return -1 * dir
-        if (aa > bb) return 1 * dir
-        return 0
+
+    let cancelled = false
+    async function load() {
+      setLoadingPatients(true)
+      try {
+        const list = await PatientsApi.listByClinician(clinicianUserId)
+        if (!cancelled) setPatients(list)
+      } catch {
+        if (!cancelled) toaster.error({ title: "No se pudieron cargar los pacientes" })
+      } finally {
+        if (!cancelled) setLoadingPatients(false)
       }
-      if (field === "durationMs") {
-        const aa = av ?? 0, bb = bv ?? 0
-        if (aa < bb) return -1 * dir
-        if (aa > bb) return 1 * dir
-        return 0
+    }
+    load()
+    return () => { cancelled = true }
+  }, [isOpen, tabValue, clinicianUserId])
+
+  useEffect(() => {
+    if (!isOpen) return
+    if (tabValue !== 'pacientes') return
+    if (!initialPatientIdToOpen) return
+    if (!patients || patients.length === 0) return
+
+    const found = patients.find(p => String(p.id).toLowerCase() === String(initialPatientIdToOpen).toLowerCase())
+
+    if (found) {
+      setSelectedPatientId(found.id)
+      setPatientDialogOpen(true)
+    }
+    // Si no se encuentra, no hacemos nada (quizá el clínico no tiene ese paciente; comportamiento seguro)
+  }, [isOpen, tabValue, initialPatientIdToOpen, patients])
+
+  // Helpers para celdas
+  function fullNameOf(row) {
+    return row.fullName || [row.firstName, row.lastName1, row.lastName2].filter(Boolean).join(' ')
+  }
+  function NameCell({ row }) {
+    return <Text noOfLines={1}>{fullNameOf(row) || '—'}</Text>
+  }
+  function IdCell({ row }) {
+    const idStr = `${row.identificationType?.toUpperCase?.() || ''} ${row.identificationNumber || ''}`.trim()
+    return <Text noOfLines={1} fontFamily="mono">{idStr || '—'}</Text>
+  }
+  function ContactCell({ row }) {
+    const parts = [row.contactEmail, row.contactPhone].filter(Boolean)
+    return <Text noOfLines={1}>{parts.join(' · ') || '—'}</Text>
+  }
+  function StatusCell({ row }) {
+    return (
+      <Badge colorPalette={row.isActive ? 'green' : 'gray'}>
+        {row.isActive ? 'Activo' : 'Inactivo'}
+      </Badge>
+    )
+  }
+  function UpdatedCell({ row }) {
+    const dt = row.updatedAt ? new Date(row.updatedAt) : null
+    return <Text noOfLines={1}>{dt ? dt.toLocaleString() : '—'}</Text>
+  }
+
+  // Filtro y ordenamiento (client-side)
+  const filteredPatients = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return patients
+    return patients.filter(p => {
+      const name = fullNameOf(p).toLowerCase()
+      const idn = `${p.identificationNumber || ""}`.toLowerCase()
+      return name.includes(t) || idn.includes(t)
+    })
+  }, [patients, q])
+
+  const visiblePatients = useMemo(() => {
+    const arr = [...filteredPatients]
+    const dir = sortDir === "asc" ? 1 : -1
+
+    const getKey = (r) => {
+      switch (sortKey) {
+        case "id":
+          return `${r.identificationType || ""} ${r.identificationNumber || ""}`.toLowerCase()
+        case "name":
+          return fullNameOf(r).toLowerCase()
+        case "sex":
+          return (r.sex || "").toString().toLowerCase()
+        case "contact":
+          return `${r.contactEmail || ""} ${r.contactPhone || ""}`.toLowerCase()
+        case "status":
+          return r.isActive ? 1 : 0
+        case "updated":
+          return r.updatedAt ? new Date(r.updatedAt).getTime() : 0
+        default:
+          return fullNameOf(r).toLowerCase()
       }
-      // strings
-      const aa = (av ?? "").toString().toLowerCase()
-      const bb = (bv ?? "").toString().toLowerCase()
-      if (aa < bb) return -1 * dir
-      if (aa > bb) return 1 * dir
+    }
+
+    arr.sort((a, b) => {
+      const ka = getKey(a)
+      const kb = getKey(b)
+      if (ka < kb) return -1 * dir
+      if (ka > kb) return 1 * dir
       return 0
     })
-    return sorted
-  }, [interviews, ivFilterQ, ivSortDir, ivSortField])
+    return arr
+  }, [filteredPatients, sortKey, sortDir])
 
-  const toggleSort = (field) => {
-    if (ivSortField === field) {
-      setIvSortDir((d) => (d === "asc" ? "desc" : "asc"))
+  function headerClick(nextKey) {
+    if (sortKey === nextKey) {
+      setSortDir(d => (d === "asc" ? "desc" : "asc"))
     } else {
-      setIvSortField(field)
-      setIvSortDir("asc")
+      setSortKey(nextKey)
+      setSortDir("asc")
     }
   }
 
-  const save = () => onClose?.()
+  // Doble click -> abrir PatientDialog readOnly
+  function onRowDoubleClick(row) {
+    setSelectedPatientId(row.id)
+    setPatientDialogOpen(true)
+  }
+  function openPatient(row) {
+    setSelectedPatientId(row.id)
+    setPatientDialogOpen(true)
+  }
 
-  // Indicador visual simple del sentido de orden
-  const arrow = (field) => ivSortField === field ? (ivSortDir === "asc" ? " ▲" : " ▼") : ""
+  const selectedPatient = useMemo(
+    () => visiblePatients.find(p => p.id === selectedPatientId) || patients.find(p => p.id === selectedPatientId) || null,
+    [visiblePatients, patients, selectedPatientId]
+  )
+
+  const save = () => onClose?.()
+  const preventParentClose = patientDialogOpen
+
+  const closePatient = () => {
+    setPatientDialogOpen(false)
+    setSelectedPatientId(null)
+  }
 
   return (
-    <Dialog.Root role="dialog" open={isOpen} onOpenChange={(e) => e.open ? null : onClose?.()} placement="center">
+    <>
+    <Dialog.Root role="dialog" open={isOpen}
+          onOpenChange={(e) => {
+            if (!e.open && patientDialogOpen) return
+            if (!e.open) onClose?.()
+          }}
+          placement="center"
+          closeOnInteractOutside={!preventParentClose}
+          closeOnEsc={!preventParentClose}
+      >
       <Portal>
         <Dialog.Backdrop bg="blackAlpha.400" backdropFilter="blur(1px)" />
         <Dialog.Positioner>
@@ -257,14 +358,13 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
               <Dialog.Title>Editar profesional</Dialog.Title>
             </Dialog.Header>
 
-            {/* Etiquetas bajo el header */}
             <ProfessionalLabelsSection professionalId={labelsSubjectId} />
 
             <Dialog.Body flex="1" overflowY="hidden" minH={0}>
               <Tabs.Root value={tabValue} onValueChange={(e) => setTabValue(e.value)} lazyMount unmountOnExit>
                 <Tabs.List>
                   <Tabs.Trigger value="datos">Datos</Tabs.Trigger>
-                  <Tabs.Trigger value="entrevistas">Entrevistas</Tabs.Trigger>
+                  <Tabs.Trigger value="pacientes">Pacientes</Tabs.Trigger>
                 </Tabs.List>
 
                 <VStack align="stretch" gap="4" mt="3">
@@ -277,7 +377,6 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
                     ) : (
                       <VStack align="stretch" gap="3">
                         <HStack align="start" gap="6">
-                          {/* Columna izquierda */}
                           <VStack align="start" gap="1" flex="1" minW={0}>
                             <Heading size="md" noOfLines={1}>{user?.email || "Profesional"}</Heading>
                             {!!user?.userRole && (<Text color="fg.muted">{user.userRole}</Text>)}
@@ -301,7 +400,6 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
                             </Grid>
                           </VStack>
 
-                          {/* Columna derecha: avatar grande */}
                           <VStack align="center" minW="220px">
                             <Avatar.Root css={{ '--avatar-size': 'sizes.32', '--avatar-font-size': 'fontSizes.3xl' }} borderWidth="1px"
                               borderColor="blackAlpha.50">
@@ -316,93 +414,125 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
                     )}
                   </Tabs.Content>
 
-                  {/* Tab Entrevistas */}
-                  <Tabs.Content value="entrevistas">
-                    {loadingInterviews ? (
-                      <HStack color="fg.muted" justify="center" py="6">
-                        <Spinner /><Text>Cargando entrevistas…</Text>
-                      </HStack>
-                    ) : errorInterviews ? (
-                      <Text color="red.500" py="6" textAlign="center">Error al cargar entrevistas.</Text>
-                    ) : (
-                      <VStack align="stretch" gap="3">
-                        {/* Filtro por paciente */}
-                        <HStack justify="space-between">
-                          <Box flex="1" maxW="360px">
-                            <Input
-                              size="sm"
-                              placeholder="Filtrar por paciente…"
-                              value={ivFilterQ}
-                              onChange={(e) => setIvFilterQ(e.target.value)}
-                            />
-                          </Box>
-                          <HStack justify="end">
-                                <Badge variant="subtle">{visibleInterviews.length} registro(s)</Badge>
-                            </HStack>
+                  {/* Tab Pacientes */}
+                  <Tabs.Content value="pacientes">
+                    <VStack align="stretch" gap="3">
+                      <HStack justify="space-between" align="center">
+                        <Heading size="sm">Pacientes del profesional</Heading>
+                        <HStack>
+                          <Badge colorPalette="gray" variant="subtle">
+                            {visiblePatients.length} registro{visiblePatients.length === 1 ? "" : "s"}
+                          </Badge>
+                          {loadingPatients && (
+                            <HStack color="fg.muted"><Spinner size="sm" /><Text>Cargando…</Text></HStack>
+                          )}
                         </HStack>
+                      </HStack>
 
-                        {visibleInterviews.length === 0 ? (
-                          <Text color="fg.muted" py="6" textAlign="center">No hay entrevistas registradas.</Text>
-                        ) : (
-                          <Box overflowX="auto" maxH="60vh" borderWidth="0px" borderRadius="md">
-                            <Table.Root size="sm" variant="outline">
-                              <Table.Header bg="gray.50">
-                                <Table.Row>
-                                  <Table.ColumnHeader
-                                    cursor="pointer"
-                                    onClick={() => toggleSort("patientName")}
+                      <HStack>
+                        <Input
+                          value={q}
+                          onChange={(e) => setQ(e.target.value)}
+                          placeholder="Filtrar por identificación o nombre…"
+                        />
+                      </HStack>
+
+                      <Table.Root size="sm" variant="outline">
+                        <Table.Header>
+                          <Table.Row>
+                            <Table.ColumnHeader
+                              minW="180px"
+                              onClick={() => headerClick('id')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Identificación {sortKey === 'id' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader
+                              onClick={() => headerClick('name')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Nombre {sortKey === 'name' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader
+                              minW="100px"
+                              onClick={() => headerClick('sex')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Sexo {sortKey === 'sex' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader
+                              minW="20px"
+                              onClick={() => headerClick('contact')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Contacto {sortKey === 'contact' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader
+                              minW="80px"
+                              onClick={() => headerClick('status')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Estado {sortKey === 'status' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader
+                              minW="100px"
+                              onClick={() => headerClick('updated')}
+                              _hover={{ bg: 'blackAlpha.50', cursor: 'pointer' }}
+                            >
+                              Actualización {sortKey === 'updated' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                            </Table.ColumnHeader>
+                            <Table.ColumnHeader minW="100px">
+                              Acciones
+                            </Table.ColumnHeader>
+                          </Table.Row>
+                        </Table.Header>
+                        <Table.Body>
+                          {loadingPatients ? (
+                            <Table.Row>
+                              <Table.Cell colSpan={7}>
+                                <HStack py="6" justify="center" color="fg.muted">
+                                  <Spinner /> <Text>Cargando…</Text>
+                                </HStack>
+                              </Table.Cell>
+                            </Table.Row>
+                          ) : visiblePatients.length === 0 ? (
+                            <Table.Row>
+                              <Table.Cell colSpan={7}>
+                                <Box py="6" textAlign="center" color="fg.muted">Sin resultados</Box>
+                              </Table.Cell>
+                            </Table.Row>
+                          ) : (
+                            visiblePatients.map((r) => (
+                              <Table.Row
+                                key={r.id}
+                                onDoubleClick={() => onRowDoubleClick(r)}
+                                onClick={() => setSelectedPatientId(r.id)}
+                                _hover={{ bg: 'gray.50', cursor: 'pointer' }}
+                                data-selected={selectedPatientId === r.id ? 'true' : undefined}
+                                _selected={{ bg: 'blue.50' }}
+                              >
+                                <Table.Cell><IdCell row={r} /></Table.Cell>
+                                <Table.Cell><NameCell row={r} /></Table.Cell>
+                                <Table.Cell>{r.sex || '—'}</Table.Cell>
+                                <Table.Cell><ContactCell row={r} /></Table.Cell>
+                                <Table.Cell><StatusCell row={r} /></Table.Cell>
+                                <Table.Cell><UpdatedCell row={r} /></Table.Cell>
+                                <Table.Cell>
+                                  <IconButton
+                                    aria-label="Abrir"
+                                    size="xs"
+                                    variant="ghost"
+                                    onClick={(e) => { e.stopPropagation(); openPatient(r) }}
                                   >
-                                    Paciente{arrow("patientName")}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader
-                                    cursor="pointer"
-                                    onClick={() => toggleSort("status")}
-                                  >
-                                    Estado{arrow("status")}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader
-                                    cursor="pointer"
-                                    onClick={() => toggleSort("startedAtUtc")}
-                                  >
-                                    Inicio{arrow("startedAtUtc")}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader
-                                    cursor="pointer"
-                                    onClick={() => toggleSort("endedAtUtc")}
-                                  >
-                                    Fin{arrow("endedAtUtc")}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader
-                                    cursor="pointer"
-                                    onClick={() => toggleSort("durationMs")}
-                                  >
-                                    Duración{arrow("durationMs")}
-                                  </Table.ColumnHeader>
-                                  <Table.ColumnHeader textAlign="right" minW="120px">Acción</Table.ColumnHeader>
-                                </Table.Row>
-                              </Table.Header>
-                              <Table.Body>
-                                {visibleInterviews.map(iv => (
-                                  <Table.Row key={iv.id}>
-                                    <Table.Cell>{iv.patientName || "—"}</Table.Cell>
-                                    <Table.Cell>{iv.status || "—"}</Table.Cell>
-                                    <Table.Cell>{iv.startedAtUtc ? new Date(iv.startedAtUtc).toLocaleString() : "—"}</Table.Cell>
-                                    <Table.Cell>{iv.endedAtUtc ? new Date(iv.endedAtUtc).toLocaleString() : "—"}</Table.Cell>
-                                    <Table.Cell>{iv.durationMs ? `${Math.round(iv.durationMs / 1000 / 60)} min` : "—"}</Table.Cell>
-                                    <Table.Cell>
-                                        <HStack justify="flex-end" gap="1">
-                                            <IconButton aria-label="Abrir" size="xs" variant="ghost" title="Abrir"><LuExternalLink /></IconButton>
-                                            <IconButton aria-label="Descargar PDF" size="xs" variant="ghost" title="Descargar PDF"><LuDownload /></IconButton>
-                                        </HStack>
-                                    </Table.Cell>
-                                  </Table.Row>
-                                ))}
-                              </Table.Body>
-                            </Table.Root>
-                          </Box>
-                        )}
-                      </VStack>
-                    )}
+                                    <LuExternalLink />
+                                  </IconButton>
+                                </Table.Cell>
+                              </Table.Row>
+                            ))
+                          )}
+                        </Table.Body>
+                      </Table.Root>
+                    </VStack>
                   </Tabs.Content>
                 </VStack>
               </Tabs.Root>
@@ -424,5 +554,15 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
         </Dialog.Positioner>
       </Portal>
     </Dialog.Root>
+    {/* Diálogo de paciente en solo lectura */}
+      <PatientDialog
+        isOpen={patientDialogOpen}
+        onClose={() => closePatient()}
+        initialValues={selectedPatient || undefined}
+        readOnly={true}
+        initialTab={initialPatientIdToOpen ? (initialPatientTab || 'hist') : 'datos'}
+        backTo={backToForPatient}
+      />
+    </>
   )
 }

@@ -43,38 +43,56 @@ function ScoreRead({ value }) {
 
 // ================== Sección de etiquetas para este intento (read-only page) ==================
 // BEGIN CHANGE: Etiquetas (componente local para asignar labels)
-function TestAttemptLabelsSection({ patientId, attemptId }) {
+function TestAttemptLabelsSection({ patientId, attemptId, readOnly }) {
   const [allLabels, setAllLabels] = useState([])
   const [assigned, setAssigned] = useState(new Set())
+  const [assignedList, setAssignedList] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
-    if (!patientId) {
-      setAllLabels([])
-      setAssigned(new Set())
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    try {
-      const labelsResp = await ProfileApi.getLabels()
-      const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
-      setAllLabels(all)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!patientId) {
+        setAllLabels([]); setAssigned(new Set()); setAssignedList([]); setLoading(false)
+        return
+      }
+      setLoading(true)
+      try {
+        // Catálogo (solo útil en modo editable)
+        const allResp = await ProfileApi.getLabels()
+        const all = Array.isArray(allResp?.items) ? allResp.items : []
+        if (!cancelled) setAllLabels(all)
 
-      const assignedResp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
-      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
-      setAssigned(new Set(mine.map(x => x.id)))
-    } catch (e) {
-      toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
-      setAllLabels([])
-      setAssigned(new Set())
-    } finally {
-      setLoading(false)
-    }
-  }
+        // Asignadas del intento
+        const resp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
+        let mine = Array.isArray(resp?.items) ? resp.items : []
 
-  useEffect(() => { load() }, [patientId, attemptId])
+        // 🛡️ Defensa: si backend devuelve el catálogo como asignadas en readOnly, trátalo como vacío
+        if (readOnly && mine.length && all.length) {
+          const sameSize = mine.length === all.length
+          const sameIds = sameSize &&
+            mine.every(m => all.some(a => a.id === m.id)) &&
+            all.every(a => mine.some(m => m.id === a.id))
+          if (sameIds) mine = []
+        }
+
+        if (!cancelled) {
+          setAssigned(new Set(mine.map(x => x.id)))
+          setAssignedList(mine)
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAllLabels([]); setAssigned(new Set()); setAssignedList([])
+          toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [patientId, attemptId, readOnly])
 
   const toggleLabel = async (lbl) => {
     if (!patientId) return
@@ -95,9 +113,12 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
     }
   }
 
-  if (!loading && allLabels.length === 0) return null
+  const listToRender = readOnly ? assignedList : allLabels
+  if (!loading && listToRender.length === 0) return null
+
 
   return (
+  listToRender.length > 0 && (
     <Box mb="2">
       <HStack justify="space-between" mb="2">
         <Text fontWeight="medium">Etiquetas de esta evaluación</Text>
@@ -106,33 +127,35 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
         )}
       </HStack>
 
-      {allLabels.length > 0 && (
-        <Wrap spacing="2">
-          {allLabels.map(lbl => {
-            const active = assigned.has(lbl.id)
-            return (
-              <WrapItem key={lbl.id}>
-                <Button
-                  size="xs"
-                  variant={active ? 'solid' : 'outline'}
-                  onClick={() => toggleLabel(lbl)}
-                  isDisabled={saving || lbl.isSystem === true}
-                  style={{
-                    borderColor: lbl.colorHex,
-                    background: active ? lbl.colorHex : 'transparent',
-                    color: active ? '#fff' : 'inherit'
-                  }}
-                  title={lbl.name}
-                >
-                  {lbl.code}
-                </Button>
-              </WrapItem>
-            )
-          })}
-        </Wrap>
-      )}
+      <Wrap spacing="2">
+        {listToRender.map(lbl => {
+          const active = readOnly ? true : assigned.has(lbl.id)
+          const disabled = readOnly || saving || lbl.isSystem === true
+          return (
+            <WrapItem key={lbl.id}>
+              <Button
+                size="xs"
+                variant={active ? 'solid' : 'outline'}
+                onClick={() => {if (!disabled) toggleLabel(lbl)}}
+                isDisabled={disabled}            // ⬅️ deshabilita la interacción
+                aria-disabled={disabled}         // ⬅️ semántica accesible
+                tabIndex={disabled ? -1 : 0}
+                style={{
+                  borderColor: lbl.colorHex,
+                  background: active ? lbl.colorHex : 'transparent',
+                  color: active ? '#fff' : 'inherit'
+                }}
+                title={lbl.name}
+              >
+                {lbl.code}
+              </Button>
+            </WrapItem>
+          )
+        })}
+      </Wrap>
     </Box>
   )
+)
 }
 // END CHANGE: Etiquetas
 export default function ReviewSacksReadOnly() {
@@ -191,6 +214,12 @@ export default function ReviewSacksReadOnly() {
   // BEGIN CHANGE: Derivar patientId desde backTo o QS actual
   const backToQS = new URLSearchParams(location.search).get("backTo") || null
   const queryParams = new URLSearchParams(window.location.search)
+  const sp = new URLSearchParams(location.search || "")
+  const roParam = sp.get("ro")
+  const readOnly =
+    (location.state && location.state.readOnly === true) ||
+    (roParam === "1")
+
   let patientId = null
   if (backToQS) {
     try {
@@ -243,7 +272,7 @@ export default function ReviewSacksReadOnly() {
     const totalPercent = cntPct > 0 ? (sumPct / cntPct) : null
     return { totalRaw, totalPercent, scales: out }
   }, [scales, valsByScaleId])
-  
+
   const chartScales = useMemo(() => {
     if (!Array.isArray(scales) || scales.length === 0) return []
     return scales.map(s => {
@@ -386,9 +415,7 @@ export default function ReviewSacksReadOnly() {
           <Button onClick={() => navigate(goBackHref, { replace: true })}>Volver</Button>
         </HStack>
       </Card.Root>
-      <Card.Root p="4">
-        <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
-      </Card.Root>
+      <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} readOnly={readOnly} />
       <Card.Root p="4">
         <VStack align="stretch" gap="4">
           {scales.map((s) => {

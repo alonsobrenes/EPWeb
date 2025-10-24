@@ -12,6 +12,8 @@ import { toaster } from '../../components/ui/toaster'
 import { Tip } from '../../components/ui/tooltip'
 import ProfessionalDialog from './ProfessionalDialog'
 
+
+
 function getErrorMessage(error) {
   const data = error?.response?.data
   if (data && typeof data === 'object') {
@@ -81,6 +83,18 @@ function textColorForHex(hex) {
 export default function ProfessionalsPage() {
   const location = useLocation()
 
+  const [deeplink] = useState(() => {
+    const sp = new URLSearchParams(location.search || '')
+    return {
+      professionalId: sp.get('openProfessionalId'),
+      tab:            sp.get('tab'),
+      openPatientId:  sp.get('openPatientId'),
+      patientTab:     sp.get('patientTab'),
+      hasAny:         !!(sp.get('openProfessionalId') || sp.get('openPatientId') || sp.get('patientTab') || sp.get('tab'))
+    }
+  })
+
+  const consumedRef = useRef(false)
   const [loadingMembers, setLoadingMembers] = useState(true)
   const [members, setMembers] = useState([])
 
@@ -112,8 +126,8 @@ export default function ProfessionalsPage() {
   // etiquetas por usuarioId -> [{code, name, color,...}]
   const [labelsByUser, setLabelsByUser] = useState({})
 
-  // === NUEVO: recordar apertura pendiente por deeplink hasta que carguen los miembros ===
-  const [pendingOpen, setPendingOpen] = useState(null)
+  const [oneShotInitials, setOneShotInitials] = useState(null)
+
 
   async function loadMembers() {
     setLoadingMembers(true)
@@ -179,43 +193,6 @@ export default function ProfessionalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Lee la URL y guarda apertura pendiente; NO abre el diálogo todavía
-  useEffect(() => {
-    const qs = new URLSearchParams(location.search)
-    const openId = qs.get('openProfessionalId')
-    const openGuid = qs.get('openProfessionalGuid')
-    const guidRegex = /^[0-9a-fA-F-]{36}$/
-    if (openId && /^\d+$/.test(openId)) {
-      const parsedId = Number(openId)
-      const guid = (openGuid && guidRegex.test(openGuid)) ? openGuid : null
-      setPendingOpen({ id: parsedId, guid })
-    } else if (openGuid && guidRegex.test(openGuid)) {
-      setPendingOpen({ id: null, guid: openGuid })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.search])
-
-  // Cuando ya hay members y hay apertura pendiente, abrimos el diálogo con la fila encontrada
-  useEffect(() => {
-    if (!pendingOpen || loadingMembers) return
-    const { id, guid } = pendingOpen
-    let row = null
-    if (id != null) {
-      row = (members || []).find(m => (m.userId ?? m.id) === id) || null
-    }
-    if (!row && guid) {
-      row = (members || []).find(m => (m.userGuid ?? m.uid ?? m.guid) === guid) || null
-    }
-    if (row) {
-      openDialogFor(row)
-      setPendingOpen(null)
-    } else {
-      // Si no aparece, no forzamos nada; simplemente limpiamos el pendiente
-      setPendingOpen(null)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingOpen, loadingMembers, members])
-
   const availableRoles = useMemo(() => {
     const s = new Set()
     for (const r of members) {
@@ -252,6 +229,55 @@ export default function ProfessionalsPage() {
     })
     return arr
   }, [members, search, roleFilter, sortBy, sortDir, valueGetter])
+ 
+  useEffect(() => {
+    if (consumedRef.current) return
+    if (!deeplink.hasAny) return
+    if (!members || members.length === 0) return
+
+    const pid = deeplink.professionalId ? Number(deeplink.professionalId) : null
+    
+    if (!pid) {
+      consumedRef.current = true
+      // limpiar URL por higiene
+      try { window.history.replaceState({}, '', '/app/clinic/profesionales') } catch {}
+      return
+    }
+
+    // Seleccionar fila y abrir
+    const row = members.find(m => Number(m.userId ?? m.id) === pid)
+    if (row) {
+      setSelectedUserId(pid)
+      setSelectedRow(row)
+      setDialogOpen(true)
+    }
+
+    setOneShotInitials({
+      initialTab: deeplink.tab || 'pacientes',
+      initialPatientIdToOpen: deeplink.openPatientId || undefined,
+      initialPatientTab: deeplink.patientTab || undefined,
+    })
+
+    // Limpiar URL sin provocar remount de la ruta
+    try { window.history.replaceState({}, '', '/app/clinic/profesionales') } catch {}
+
+    // Marcar consumido (no volver a leer location.search)
+    consumedRef.current = true
+  }, [members]) // ← depende solo de members; NO de location.search
+
+  const initialTab = oneShotInitials?.initialTab
+  const initialPatientIdToOpen = oneShotInitials?.initialPatientIdToOpen
+  const initialPatientTab = oneShotInitials?.initialPatientTab
+
+
+  const closeDialog = () => {
+    setDialogOpen(false)
+    // limpiar selección y estados
+    setSelectedUserId(null)
+    setSelectedUserGuid(null)
+    setSelectedRow(null)
+    setOneShotInitials(null)
+  }
 
   const total = filteredSorted.length
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -294,7 +320,7 @@ export default function ProfessionalsPage() {
     }
   }
 
-  const noSeatsAvailable = typeof seats === 'number' && seats > 0 && (members?.length || 0) >= seats
+  //const noSeatsAvailable = typeof seats === 'number' && seats > 0 && (members?.length || 0) >= seats
   const emailValid = /\S+@\S+\.\S+/.test(inviteEmail)
 
   async function submitInvite(e) {
@@ -353,22 +379,6 @@ export default function ProfessionalsPage() {
     setDialogOpen(true)
   }
 
-  async function closeDialog() {
-    // guardamos el id ANTES de limpiar estado
-    const uid = selectedUserId
-    setDialogOpen(false)
-    try {
-      if (uid != null) {
-        const fresh = await OrgApi.listLabelsForProfessional(uid)
-        setLabelsByUser(prev => ({ ...prev, [uid]: fresh }))
-      }
-    } catch {
-      // silencioso: si falla, no interrumpimos el cierre
-    }
-    setSelectedUserId(null)
-    setSelectedUserGuid(null)
-  }
-
   function handleRowClick(row) {
     const currentKey = selectedRow ? (selectedRow.userId ?? selectedRow.id) : null
     const nextKey = row ? (row.userId ?? row.id) : null
@@ -378,7 +388,6 @@ export default function ProfessionalsPage() {
     }
     setSelectedRow(row)
   }
-
   return (
     <>
       {/* Título + filtros (una fila) */}
@@ -634,13 +643,14 @@ export default function ProfessionalsPage() {
         </Box>
       )}
 
-      {/* Dialogo de Profesional */}
       <ProfessionalDialog
         isOpen={dialogOpen}
-        onClose={closeDialog}
-        userId={selectedUserId}
-        userGuid={selectedUserGuid}
-        initialUser={selectedRow}
+          onClose={closeDialog}
+          userId={selectedUserId ?? undefined}
+          initialUser={selectedRow ?? undefined}
+          initialTab={initialTab}
+          initialPatientIdToOpen={initialPatientIdToOpen}
+          initialPatientTab={initialPatientTab}
       />
 
       {/* Diálogo Invitar */}

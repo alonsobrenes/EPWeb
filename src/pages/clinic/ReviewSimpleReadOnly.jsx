@@ -13,9 +13,10 @@ import { toaster } from "../../components/ui/toaster"
 import TestProfileChart from "../../components/tests/TestProfileChart"
 import { ProfileApi } from '../../api/profileApi'
 
-function TestAttemptLabelsSection({ patientId, attemptId }) {
+function TestAttemptLabelsSection({ patientId, attemptId, readOnly }) {
   const [allLabels, setAllLabels] = useState([])
   const [assigned, setAssigned] = useState(new Set())
+  const [assignedList, setAssignedList] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -24,6 +25,7 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
     if (!patientId) {
       setAllLabels([])
       setAssigned(new Set())
+      setAssignedList([])
       setLoading(false)
       return
     }
@@ -36,12 +38,24 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
 
       const assignedResp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
       const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+
+      if (readOnly && mine.length > 0 && all.length > 0) {
+        const sameSize = mine.length === all.length
+        const sameIds =
+          sameSize &&
+          mine.every(m => all.some(a => a.id === m.id)) &&
+          all.every(a => mine.some(m => m.id === a.id))
+        if (sameIds) mine = []
+      }
+
       setAssigned(new Set(mine.map(x => x.id)))
+      setAssignedList(mine)
     } catch (e) {
       toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
       // En caso de error, no bloquees la UI
       setAllLabels([])
       setAssigned(new Set())
+      setAssignedList([])
     } finally {
       setLoading(false)
     }
@@ -50,7 +64,7 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
   useEffect(() => { load() }, [load])
 
   const toggleLabel = async (lbl) => {
-    if (!patientId) return
+    if (readOnly || !patientId) return
     const isOn = assigned.has(lbl.id)
     try {
       setSaving(true)
@@ -71,45 +85,49 @@ function TestAttemptLabelsSection({ patientId, attemptId }) {
   // Reglas de visibilidad:
   // - Mientras carga y HAY patientId => muestra spinner en línea.
   // - Si ya no carga y no hay etiquetas => no muestres nada (oculta toda la sección).
-  if (!loading && allLabels.length === 0) {
-    return null
-  }
+
+  const listToRender = readOnly ? assignedList : allLabels
+  // Reglas de visibilidad: si no hay nada que mostrar y terminó de cargar, oculta sección
+  if (!loading && listToRender.length === 0) return null
 
   return (
-    <Box mb="2">
-      <HStack justify="space-between" mb="2">
-        <Text fontWeight="medium">Etiquetas de esta evaluación</Text>
-        {patientId && loading && (
-          <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
-        )}
-      </HStack>
-
-      {allLabels.length > 0 && (
-        <Wrap spacing="2">
-          {allLabels.map(lbl => {
-            const active = assigned.has(lbl.id)
-            return (
-              <WrapItem key={lbl.id}>
-                <Button
-                  size="xs"
-                  variant={active ? 'solid' : 'outline'}
-                  onClick={() => toggleLabel(lbl)}
-                  isDisabled={saving || lbl.isSystem === true}
-                  style={{
-                    borderColor: lbl.colorHex,
-                    background: active ? lbl.colorHex : 'transparent',
-                    color: active ? '#fff' : 'inherit'
-                  }}
-                  title={lbl.name}
-                >
-                  {lbl.code}
-                </Button>
-              </WrapItem>
-            )
-          })}
-        </Wrap>
-      )}
-    </Box>
+    listToRender.length > 0 && (
+        <Box mb="2">
+          <HStack justify="space-between" mb="2">
+            <Text fontWeight="medium">Etiquetas de esta evaluación</Text>
+            {patientId && loading && (
+              <HStack><Spinner size="sm" /><Text>Cargando…</Text></HStack>
+            )}
+          </HStack>
+    
+          <Wrap spacing="2">
+            {listToRender.map(lbl => {
+              const active = readOnly ? true : assigned.has(lbl.id)
+              const disabled = readOnly || saving || lbl.isSystem === true
+              return (
+                <WrapItem key={lbl.id}>
+                  <Button
+                    size="xs"
+                    variant={active ? 'solid' : 'outline'}
+                    onClick={() => {if (!disabled) toggleLabel(lbl)}}
+                    isDisabled={disabled}            // ⬅️ deshabilita la interacción
+                    aria-disabled={disabled}         // ⬅️ semántica accesible
+                    tabIndex={disabled ? -1 : 0}
+                    style={{
+                      borderColor: lbl.colorHex,
+                      background: active ? lbl.colorHex : 'transparent',
+                      color: active ? '#fff' : 'inherit'
+                    }}
+                    title={lbl.name}
+                  >
+                    {lbl.code}
+                  </Button>
+                </WrapItem>
+              )
+            })}
+          </Wrap>
+        </Box>
+      )
   )
 }
 
@@ -304,6 +322,7 @@ async function computeResultsFallback(effectiveTestId, questions, answersByQ) {
 }
 
 export default function ReviewSimpleReadOnly() {
+  
   const { attemptId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
@@ -312,6 +331,10 @@ export default function ReviewSimpleReadOnly() {
   const testIdQS = qs.get("testId") || location.state?.testId || null
   const testName = location.state?.testName || null
   const backTo = qs.get('backTo');
+
+  const sp = new URLSearchParams(location.search || "")
+  const roParam = sp.get("ro")
+  const readOnly = (location.state && location.state.readOnly === true) || (roParam === "1")
 
   const url = new URL(backTo, window.location.origin); // El segundo parámetro es la base
   const patientId = url.searchParams.get('openPatientId');
@@ -596,9 +619,7 @@ export default function ReviewSimpleReadOnly() {
           </Button>
         </HStack>
       </Card.Root>
-      <Card.Root p="4">
-      <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} />
-      </Card.Root>
+      <TestAttemptLabelsSection patientId={patientId} attemptId={attemptId} readOnly={readOnly} />
       <Card.Root p="4">
         {isTriads ? (
           <Box borderWidth="1px" rounded="md" overflow="auto">

@@ -10,6 +10,14 @@ export const PatientsApi = {
     return data // { total, page, pageSize, items }
   },
 
+  async listByClinician(userId) {
+    if (userId === null || userId === undefined) {
+      throw new Error('listByClinician: userId (int) es requerido')
+    }
+    const { data } = await client.get(`/clinician/patients/by-clinician/${userId}`)
+    return Array.isArray(data.items) ? data.items : []
+  },
+
   async getById(id) {
     const { data } = await client.get(`/patients/${id}`)
     return data
@@ -31,7 +39,7 @@ export const PatientsApi = {
   },
   async lookupByDocument({ identificationType, identificationNumber }) {
     const params = { identificationType, identificationNumber }
-    const { data } = await api.get('/patients/lookup', { params })
+    const { data } = await client.get('/patients/lookup', { params })
       // Se espera: { id, firstName, lastName1, lastName2, ... } o null
       return data || null
   }
