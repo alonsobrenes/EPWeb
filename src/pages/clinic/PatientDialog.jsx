@@ -29,9 +29,10 @@ const ID_TYPES = [
   { value: 'pasaporte', label: 'Pasaporte' },
 ]
 
-function PatientLabelsSection({ patientId }) {
+function PatientLabelsSection({ patientId, readOnly }) {
   const [allLabels, setAllLabels] = useState([])
   const [assigned, setAssigned] = useState(new Set())
+  const [assignedList, setAssignedList] = useState([]) 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -49,15 +50,27 @@ function PatientLabelsSection({ patientId }) {
       const labelsResp = await ProfileApi.getLabels()
       const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
       setAllLabels(all)
-
       const assignedResp = await ProfileApi.getLabelsFor({ type: 'patient', id: patientId })
-      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      let mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      if (readOnly && mine.length > 0 && all.length > 0) {
+        const sameSize = mine.length === all.length
+        const sameIds =
+          sameSize &&
+          mine.every(m => all.some(a => a.id === m.id)) &&
+          all.every(a => mine.some(m => m.id === a.id))
+        if (sameIds) {
+          // Falso positivo: no hay etiquetas del paciente, sólo vino el catálogo
+          mine = []
+        }
+      }
       setAssigned(new Set(mine.map(x => x.id)))
+      setAssignedList(mine)
     } catch (e) {
       toaster.error({ title: 'No se pudieron cargar las etiquetas', description: e?.message || 'Error' })
       // En caso de error, no bloquees la UI
       setAllLabels([])
       setAssigned(new Set())
+      setAssignedList([])
     } finally {
       setLoading(false)
     }
@@ -87,7 +100,9 @@ function PatientLabelsSection({ patientId }) {
   // Reglas de visibilidad:
   // - Mientras carga y HAY patientId => muestra spinner en línea.
   // - Si ya no carga y no hay etiquetas => no muestres nada (oculta toda la sección).
-  if (!loading && allLabels.length === 0) {
+  const listToRender = readOnly ? assignedList : allLabels
+
+  if (!loading && listToRender.length === 0) {
     return null
   }
 
@@ -102,19 +117,26 @@ function PatientLabelsSection({ patientId }) {
 
       {allLabels.length > 0 && (
         <Wrap spacing="2">
-          {allLabels.map(lbl => {
-            const active = assigned.has(lbl.id)
+          {listToRender.map(lbl => {
+            const active = readOnly ? true : assigned.has(lbl.id)
+            const disabled = !!readOnly || saving || lbl.isSystem === true
             return (
               <WrapItem key={lbl.id}>
                 <Button
                   size="xs"
                   variant={active ? 'solid' : 'outline'}
-                  onClick={() => toggleLabel(lbl)}
-                  isDisabled={saving || lbl.isSystem === true}
+                  onClick={() => {
+                    if (disabled) return // ⬅️ cortocircuito HARD
+                    toggleLabel(lbl)
+                  }}
+                  isDisabled={disabled}            // ⬅️ deshabilita la interacción
+                  aria-disabled={disabled}         // ⬅️ semántica accesible
+                  tabIndex={disabled ? -1 : 0}     // ⬅️ evita focus con teclado
                   style={{
                     borderColor: lbl.colorHex,
                     background: active ? lbl.colorHex : 'transparent',
-                    color: active ? '#fff' : 'inherit'
+                    color: active ? '#fff' : 'inherit',
+                    pointerEvents: disabled ? 'none' : 'auto', // ⬅️ opcional: bloquea clicks al 100%
                   }}
                   title={lbl.name}
                 >
@@ -261,10 +283,12 @@ function QuotaBar({ value = 0 }) {
 }
 
 // ====================== TAB: Adjuntos (nuevo, sin tocar lo demás) ======================
-function PatientAttachmentsTab({ patientId, highlightAttachmentId }) {
+function PatientAttachmentsTab({ patientId, highlightAttachmentId, readOnly }) {
   const [items, setItems] = useState([])
   const [allLabels, setAllLabels] = useState([])
-  const [assignedMap, setAssignedMap] = useState(new Map()) // fileId -> Set(labelId)
+  //const [assignedMap, setAssignedMap] = useState(new Map()) // fileId -> Set(labelId)
+  const [assignedByFile, setAssignedByFile] = useState(new Map())
+
   const [savingLabelFor, setSavingLabelFor] = useState(null) // fileId
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -295,39 +319,35 @@ function PatientAttachmentsTab({ patientId, highlightAttachmentId }) {
     return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
   }
 
-  const toggleAttachmentLabel = async (fileId, lbl) => {
-    if (!fileId || !lbl?.id) return
-    try {
-      setSavingLabelFor(fileId)
-      const current = new Set(assignedMap.get(fileId) || [])
-      const isOn = current.has(lbl.id)
-      if (isOn) {
-        await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
-        current.delete(lbl.id)
-      } else {
-        await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
-        current.add(lbl.id)
-      }
-      setAssignedMap(prev => {
-        const next = new Map(prev)
-        next.set(fileId, current)
-        return next
-      })
-    } catch (e) {
-      toaster.error({ title: 'No se pudo actualizar etiquetas', description: e?.message || 'Error' })
-    } finally {
-      setSavingLabelFor(null)
+  const toggleAttachmentLabel = async (fileIdRaw, lbl) => {
+  const fileId = String(fileIdRaw)
+  if (!fileId || !lbl?.id) return
+  try {
+    setSavingLabelFor(fileId)
+    const current = assignedByFile.get(fileId) || []
+    const has = current.some(x => x.id === lbl.id)
+
+    if (has) {
+      await ProfileApi.unassignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
+    } else {
+      await ProfileApi.assignLabel({ labelId: lbl.id, targetType: 'attachment', targetId: fileId })
     }
+
+    const next = new Map(assignedByFile)
+    next.set(fileId, has ? current.filter(x => x.id !== lbl.id) : [...current, lbl])
+    setAssignedByFile(next)
+  } finally {
+    setSavingLabelFor(null)
   }
+}
 
   const load = async () => {
     try {
       setLoading(true)
       setOwnershipError(false)
-            const list = await PatientAttachmentsApi.list(patientId)
+      const list = await PatientAttachmentsApi.list(patientId)
       const arr = Array.isArray(list) ? list : []
       setItems(arr)
-
       try {
         const labelsResp = await ProfileApi.getLabels()
         const all = Array.isArray(labelsResp?.items) ? labelsResp.items : []
@@ -335,18 +355,19 @@ function PatientAttachmentsTab({ patientId, highlightAttachmentId }) {
       } catch { setAllLabels([]) }
 
       try {
-        const pairs = await Promise.all(arr.map(async (it) => {
-          const fileId = it.fileId || it.file_id
-          try {
-            const resp = await ProfileApi.getLabelsFor({ type: 'attachment', id: fileId })
-            const mine = Array.isArray(resp?.items) ? resp.items : []
-            return [fileId, new Set(mine.map(x => x.id))]
-          } catch {
-            return [fileId, new Set()]
-          }
-        }))
-        setAssignedMap(new Map(pairs))
-      } catch { setAssignedMap(new Map()) }
+       const pairs = await Promise.all(arr.map(async (it) => {
+  const fileId = String(it.fileId || it.file_id)
+  try {
+    const resp = await ProfileApi.getLabelsFor({ type: 'attachment', id: fileId })
+    const mine = Array.isArray(resp?.items) ? resp.items : []   // objetos Label
+    return [fileId, mine]
+  } catch {
+    return [fileId, []]
+  }
+}))
+setAssignedByFile(new Map(pairs))
+
+      } catch { setAssignedByFile(new Map()) }
 
       try {
         const lb = await PatientAttachmentsApi.storageLimitBytes()
@@ -467,7 +488,7 @@ style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--chakra-c
         </div>
       )}
       {paywall && <PaywallCTA />}
-      {/* Form de subida (sin iconos extra para no tocar imports) */}
+      {!readOnly && (
       <VStack align = "stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle"
         opacity={ownershipError? 0.6 : 1} pointerEvents={ownershipError? 'none' : 'auto'}>
 
@@ -493,39 +514,38 @@ style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--chakra-c
         </HStack>
         <Text textStyle="xs" color="fg.muted">Permitidos: PDF, PNG, JPG. El servidor valida tipo/tamaño y cuotas.</Text>
         {/* Barra de cuota */}
-    {(() => {
-  const used = sumUsedBytes(items)
-  if (typeof limitBytes === 'number' && limitBytes > 0) {
-    //const pct = Math.min(100, Math.round((used / limitBytes) * 100))
-    const pct = (Number.isFinite(used) && Number.isFinite(limitBytes) && limitBytes > 0)
-  ? ((used / limitBytes) * 100).toFixed(2)
-  : null
+            {(() => {
+          const used = sumUsedBytes(items)
+          if (typeof limitBytes === 'number' && limitBytes > 0) {
+            //const pct = Math.min(100, Math.round((used / limitBytes) * 100))
+            const pct = (Number.isFinite(used) && Number.isFinite(limitBytes) && limitBytes > 0)
+          ? ((used / limitBytes) * 100).toFixed(2)
+          : null
 
-  const barColor = storageColorFromPct(pct)
-return (
-      <VStack align="stretch" gap="1" mt="2">
-        <HStack justify="space-between">
-          <Text textStyle="sm">Almacenamiento</Text>
-          <Text textStyle="sm" color="fg.muted">
-            {toHuman(used)} / {toHuman(limitBytes)} ({pct}%)
-          </Text>
-        </HStack>
-        <QuotaBar value={pct ?? 0} color={barColor} />
+          const barColor = storageColorFromPct(pct)
+        return (
+              <VStack align="stretch" gap="1" mt="2">
+                <HStack justify="space-between">
+                  <Text textStyle="sm">Almacenamiento</Text>
+                  <Text textStyle="sm" color="fg.muted">
+                    {toHuman(used)} / {toHuman(limitBytes)} ({pct}%)
+                  </Text>
+                </HStack>
+                <QuotaBar value={pct ?? 0} color={barColor} />
+              </VStack>
+            )
+          }
+          return (
+            <Text textStyle="sm" color="fg.muted" mt="2">
+              Usado: {toHuman(used)}
+            </Text>
+          )
+        })()}
+
+
       </VStack>
-    )
-  }
-  return (
-    <Text textStyle="sm" color="fg.muted" mt="2">
-      Usado: {toHuman(used)}
-    </Text>
-  )
-})()}
-
-
-      </VStack>
-
-      <Separator />
-
+       )}
+      {!readOnly && (<Separator />)}
       <Table.Root size="sm" variant="outline">
         <Table.Header>
           <Table.Row>
@@ -580,49 +600,58 @@ return (
        scrollbarWidth: 'thin'       // Firefox: scrollbar delgada
      }}
    >
-     {allLabels.length === 0 ? (
-       <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
-     ) : (
-       allLabels.map(lbl => {
-         const active = (assignedMap.get(fileId) || new Set()).has(lbl.id)
-         return (
-           <button
-             key={`lbl-${fileId}-${lbl.id}`}
-             onClick={() => toggleAttachmentLabel(fileId, lbl)}
-             disabled={!!savingLabelFor || ownershipError || paywall}
-             title={`${lbl.code} — ${lbl.name}`}
-             style={{
-               width: 14, height: 14, minWidth: 14, minHeight: 14,
-               borderRadius: 4,
-               border: `2px solid ${lbl.colorHex}`,
-               background: active ? lbl.colorHex : 'transparent',
-               cursor: 'pointer'
-             }}
-             aria-label={`Etiqueta ${lbl.code}${active ? ' (asignada)' : ''}`}
-           />
-         )
-       })
-     )}
+     {(() => {
+      const key = String(fileId)
+      const assigned = assignedByFile.get(key) || [] // ← SOLO etiquetas asignadas
+
+      if (assigned.length === 0) {
+        return <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
+      }
+
+      const disabled = !!readOnly || !!savingLabelFor || ownershipError || paywall
+
+      return assigned.map((lbl) => (
+        <button
+          key={`lbl-${key}-${lbl.id}`}
+          onClick={() => { if (!disabled) toggleAttachmentLabel(key, lbl) }}
+          disabled={disabled}
+          aria-disabled={disabled}
+          tabIndex={disabled ? -1 : 0}
+          title={`${lbl.code} — ${lbl.name}`}
+          style={{
+            width: 14, height: 14, minWidth: 14, minHeight: 14,
+            borderRadius: 4,
+            border: `2px solid ${lbl.colorHex}`,
+            background: lbl.colorHex,
+            cursor: disabled ? 'auto' : 'pointer'
+          }}
+          aria-label={`Etiqueta ${lbl.code} (asignada)`}
+        />
+      ))
+    })()}
    </div>
  </Table.Cell>
 
-                  <Table.Cell>
-                    <HStack justify="flex-end" gap="1">
+<Table.Cell>
+  <HStack justify="flex-end" gap="1">
    <IconButton
      size="xs"
      variant="ghost"
      aria-label="Descargar"
      title="Descargar"
-     onClick={() => onDownload(fileId, name)}     
+     onClick={() => onDownload(fileId, name)}
    ><LuDownload /></IconButton>
-   <IconButton
-     size="xs"
-     variant="ghost"
-     colorPalette="red"
-     aria-label="Eliminar"
-     title="Eliminar"
-     onClick={() => onDelete(fileId)}    
-   ><LuTrash2 /></IconButton>
+   {!readOnly && (
+              <IconButton
+                size="xs"
+                variant="ghost"
+                colorPalette="red"
+                aria-label="Eliminar"
+                title="Eliminar"
+                onClick={() => onDelete(fileId)}
+              ><LuTrash2 />
+              </IconButton>
+  )}
  </HStack>
                   </Table.Cell>
                 </Table.Row>
@@ -637,7 +666,7 @@ return (
 
 
 // ====================== Historial del paciente ======================
- function PatientHistory({ patientId, patientName, onClose, highlightAttemptId = null }) {  
+ function PatientHistory({ patientId, patientName, onClose, highlightAttemptId = null, backTo, readOnly }) {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
@@ -664,7 +693,7 @@ return (
   async function fetchItems() {
     try {
       setLoading(true)
-      const data = await ClinicianApi.listAssessmentsByPatient(patientId)
+      const data = await ClinicianApi.listAssessmentsByPatient(patientId)      
       const arr = data?.items || []
       setItems(arr)
 
@@ -676,12 +705,14 @@ return (
               try
             {
                 const resp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
-            const mine = Array.isArray(resp?.items) ? resp.items : []
-            return [attemptId, new Set(mine.map(x => x.id))]
+                const mine = Array.isArray(resp?.items) ? resp.items : []
+            //return [attemptId, new Set(mine.map(x => x.id))]
+            return [attemptId, mine]
           }
         catch
         {
-            return [attemptId, new Set()]
+            //return [attemptId, new Set()]
+            return [attemptId, []]
           }
     }))
         setLabelsByAttempt(new Map(pairs.filter(([k]) => !!k)))
@@ -723,23 +754,57 @@ useEffect(() => {
     const testName  = row.testName ?? row.test_name ?? row.testCode ?? row.test_code ?? "Test"
     const isDraft   = status === "in_progress" || status === "review_pending"
     const isSacks   = (row.testName || row.test_name || row.testCode || row.test_code || "").toUpperCase().includes("SACKS")
+    //const backTo = `/app/clinic/pacientes?openPatientId=${patientId}&tab=hist`
+    const defaultBackTo = `/app/clinic/pacientes?openPatientId=${patientId}&tab=hist`
+    // const target = backTo ?? defaultBackTo
+    // const enc = encodeURIComponent(target)
 
-    const backTo = encodeURIComponent(`/app/clinic/pacientes?openPatientId=${patientId}&tab=hist`)
+    //
+
+    const raw = backTo ?? defaultBackTo
+
+    // Normaliza para el caso "profesionales": agrega tab=pacientes y openPatientId=<GUID>
+    let normalized = raw
+    try {
+      // Construimos URL absoluta temporal para poder manipular searchParams
+      const base = window.location.origin
+      const u = new URL(raw.startsWith('http') ? raw : base + raw)
+
+      // Si el path contiene "/app/clinic/profesionales", forzamos tab=pacientes
+      if (u.pathname.includes('/app/clinic/profesionales')) {
+        if (!u.searchParams.get('tab')) u.searchParams.set('tab', 'pacientes')
+        if (!u.searchParams.get('openPatientId') && patientId) {
+          u.searchParams.set('openPatientId', String(patientId))
+        }
+
+        if (!u.searchParams.get('patientTab')) {
+          u.searchParams.set('patientTab', 'hist')
+        }
+      }
+
+      normalized = u.pathname + (u.search ? `?${u.searchParams.toString()}` : '')
+    } catch {
+      // Si algo falla, seguimos con raw tal cual (mejor fallback que romper)
+      normalized = raw
+    }
+
+    const enc = encodeURIComponent(normalized)
 
     if (!attemptId || !testId) {
       navigate(`/app/clinic/evaluaciones?patientId=${patientId}`)
       return
     }
 
+    const ro = readOnly ? '1' : '0'
+
     if (isSacks) {
-      if (isDraft) {
-        navigate(`/app/clinic/review/${attemptId}?testId=${testId}&backTo=${backTo}`, { state: { testId, testName } })
+      if (isDraft){
+        navigate(`/app/clinic/review/${attemptId}?testId=${testId}&backTo=${enc}`, { state: { testId, testName } })
       } else {
-        navigate(`/app/clinic/review/${attemptId}/read?testId=${testId}&backTo=${backTo}`, { state: { testId, testName } })
+        navigate(`/app/clinic/review/${attemptId}/read?testId=${testId}&backTo=${enc}&ro=${ro}`, { state: { testId, testName, readOnly  } })
       }
     } else {
-      // NO-SACKS: siempre read-only (tabla)
-      navigate(`/app/clinic/review/${attemptId}/simple?testId=${testId}&backTo=${backTo}`, { state: { testId, testName } })
+      navigate(`/app/clinic/review/${attemptId}/simple?testId=${testId}&backTo=${enc}&ro=${ro}`, { state: { testId, testName, readOnly  } })
     }
   }
 
@@ -967,40 +1032,39 @@ async function downloadRow(row) {
     }
   }
 
-  const renderSwatches = (attemptId) => {
-    const ids = labelsByAttempt.get(attemptId) || new Set()
-    if (!ids.size) return <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
+  const renderSwatches = (attemptIdRaw) => {
+  // Normaliza la clave (por si llega como GUID en distinto casing/tipo)
+  const key = attemptIdRaw != null ? String(attemptIdRaw).toLowerCase() : null
+  const list = key ? (labelsByAttempt.get(key) || labelsByAttempt.get(attemptIdRaw) || []) : []
 
-    const list = Array.from(ids)
-      .map(id => allLabels.find(l => l.id === id))
-      .filter(Boolean)
-
-    return (
-      <div style={{
-        display: 'flex',
-        gap: 6,
-        justifyContent: 'center',
-        alignItems: 'center',
-        maxWidth: 120,
-        margin: '0 auto'
-      }}>
-        {list.map(lbl => (
-          <span
-            key={lbl.id}
-            title={`${lbl.code} — ${lbl.name}`}
-            style={{
-              width: 12, height: 12, minWidth: 12, minHeight: 12,
-              borderRadius: 4,
-              border: `2px solid ${lbl.colorHex}`,
-              background: lbl.colorHex
-            }}
-          />
-        ))}
-      </div>
-    )
+  if (list.length === 0) {
+    return <span style={{ color: 'var(--chakra-colors-fg-muted)' }}>—</span>
   }
 
-   
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 6,
+      justifyContent: 'center',
+      alignItems: 'center',
+      maxWidth: 120,
+      margin: '0 auto'
+    }}>
+      {list.map(lbl => (
+        <span
+          key={lbl.id}
+          title={`${lbl.code} — ${lbl.name}`}
+          style={{
+            width: 12, height: 12, minWidth: 12, minHeight: 12,
+            borderRadius: 4,
+            border: `2px solid ${lbl.colorHex}`,
+            background: lbl.colorHex
+          }}
+        />
+      ))}
+    </div>
+  )
+}
 
   return (
     <VStack align="stretch" gap="3">
@@ -1129,11 +1193,12 @@ export default function PatientDialog({
   onClose,
   onSubmit,
   initialValues,
-  initialTab = 'datos',   // <- prop externa sigue existiendo
+  initialTab = 'datos',
+  readOnly = false,
+  backTo = null,
 }) {
   const cancelRef = useRef(null)
-  const location = useLocation() // <-- usar router location
-
+  const location = useLocation() 
   // Derivar tab inicial desde: prop -> location.state.tab -> ?tab=...
   const params = new URLSearchParams(location.search)
   const routerTab = location.state?.tab ?? params.get('tab') ?? null
@@ -1142,7 +1207,6 @@ export default function PatientDialog({
   const qsSessionId = params.get('session_id') || null
   const qsAttachmentId  = params.get('attachment_id') || null
   const qsAttemptId  = params.get('attempt_id') || null
-
   const [innerSessionId, setInnerSessionId] = useState(qsSessionId)
   useEffect(() => {
     setInnerSessionId(qsSessionId)
@@ -1196,7 +1260,7 @@ export default function PatientDialog({
   }, [isOpen, initialValues])
 
   useEffect(() => {
-    if (!open) return
+    if (!isOpen) return
     if (tabValue !== 'sess') {
     if (innerSessionId !== null) setInnerSessionId(null)
       return
@@ -1208,10 +1272,10 @@ export default function PatientDialog({
       u.searchParams.delete('session_id')
       window.history.replaceState({}, '', u.pathname + u.search)
     }
-    }, [open, tabValue, params,innerSessionId])
+    }, [isOpen, tabValue, params,innerSessionId])
 
     useEffect(() => {
-    if (!open) return
+    if (!isOpen) return
     if (tabValue !== 'adj') {
     if (innerAttachmentId !== null) setInnerAttachmentId(null)
       return
@@ -1223,10 +1287,10 @@ export default function PatientDialog({
       u.searchParams.delete('attachment_id')
       window.history.replaceState({}, '', u.pathname + u.search)
     }
-    }, [open, tabValue, params,innerAttachmentId])
+    }, [isOpen, tabValue, params,innerAttachmentId])
 
     useEffect(() => {
-    if (!open) return
+    if (!isOpen) return
     if (tabValue !== 'hist') {
     if (innerAttemptId !== null) setInnerAttemptId(null)
       return
@@ -1238,7 +1302,7 @@ export default function PatientDialog({
       u.searchParams.delete('attempt_id')
       window.history.replaceState({}, '', u.pathname + u.search)
     }
-    }, [open, tabValue, params,innerAttemptId])
+    }, [isOpen, tabValue, params,innerAttemptId])
 
   const change = (k, v) => setForm((prev) => ({ ...prev, [k]: v }))
 
@@ -1263,6 +1327,7 @@ export default function PatientDialog({
   const patientId = initialValues?.id || null
   const patientName = [form.firstName, form.lastName1, form.lastName2].filter(Boolean).join(' ')
   const hasId = !!patientId
+
   return (
     <Dialog.Root
       key={patientId || 'new'}
@@ -1276,23 +1341,37 @@ export default function PatientDialog({
         <Dialog.Backdrop bg="blackAlpha.400" backdropFilter="blur(1px)" />
         <Dialog.Positioner>
           <Dialog.Content
-  maxW="960px"
-  maxH="90vh"
-  display="flex"
-  flexDirection="column"
-  bg="white"                         // <- fondo sólido (evita “mezcla” con la tabla atrás)
-  _dark={{ bg: "gray.800" }}         // <- equivalente en modo oscuro
-  shadow="2xl"                       // <- más elevación
-  rounded="xl"
-  borderWidth="1px"
-  borderColor="blackAlpha.300"       // <- separador del entorno
->
+            maxW="960px"
+            maxH="90vh"
+            display="flex"
+            flexDirection="column"
+            bg="white"                         // <- fondo sólido (evita “mezcla” con la tabla atrás)
+            _dark={{ bg: "gray.800" }}         // <- equivalente en modo oscuro
+            shadow="2xl"                       // <- más elevación
+            rounded="xl"
+            borderWidth="1px"
+            borderColor="blackAlpha.300"       // <- separador del entorno
+          >
 
 
             <Dialog.Header bg="brand.50" _dark={{ bg: "gray.800" }} position="sticky" top="0" zIndex="1" borderBottomWidth="1px" borderColor="blackAlpha.200">
               <Dialog.Title>{initialValues ? 'Editar paciente' : 'Nuevo paciente'}</Dialog.Title>
             </Dialog.Header>
-            <PatientLabelsSection patientId={patientId} />
+            {readOnly && (
+              <Box px="4" py="2" bg="yellow.50" borderBottomWidth="1px">
+                <Text fontSize="sm" color="fg.muted">Solo lectura</Text>
+              </Box>
+            )}
+            {readOnly && (
+                <Box
+                  position="absolute"
+                  inset="0"
+                  // deja un pequeño padding transparente para que el scroll del contenedor funcione
+                  bg="transparent"
+                  pointerEvents="auto"
+                />
+              )}
+            <PatientLabelsSection patientId={patientId} readOnly={readOnly}/>
             {/* El body crece y hace scroll interno */}
             <Dialog.Body flex="1" overflowY="hidden" minH={0}>
               <Tabs.Root
@@ -1318,6 +1397,7 @@ export default function PatientDialog({
                           <select
                             value={form.identificationType}
                             onChange={(e) => change('identificationType', e.target.value)}
+                            disabled={readOnly}
                             style={{ padding: '8px', width: '100%', borderRadius: 6, border: '1px solid var(--chakra-colors-border)' }}
                           >
                             {ID_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -1328,6 +1408,7 @@ export default function PatientDialog({
                           <Input
                             value={form.identificationNumber}
                             onChange={(e) => change('identificationNumber', e.target.value)}
+                            disabled={readOnly}
                             placeholder="Ej. 1-2345-6789"
                           />
                         </GridItem>
@@ -1339,6 +1420,7 @@ export default function PatientDialog({
                           <Input
                             value={form.firstName}
                             onChange={(e) => change('firstName', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                         <GridItem>
@@ -1346,6 +1428,7 @@ export default function PatientDialog({
                           <Input
                             value={form.lastName1}
                             onChange={(e) => change('lastName1', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                         <GridItem>
@@ -1353,6 +1436,7 @@ export default function PatientDialog({
                           <Input
                             value={form.lastName2 || ''}
                             onChange={(e) => change('lastName2', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                       </Grid>
@@ -1364,6 +1448,7 @@ export default function PatientDialog({
                             type="date"
                             value={form.dateOfBirth || ''}
                             onChange={(e) => change('dateOfBirth', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                         <GridItem>
@@ -1371,6 +1456,7 @@ export default function PatientDialog({
                           <Input
                             value={form.sex || ''}
                             onChange={(e) => change('sex', e.target.value)}
+                            disabled={readOnly}
                             placeholder="M/F/X"
                           />
                         </GridItem>
@@ -1379,6 +1465,7 @@ export default function PatientDialog({
                           <Switch.Root
                             checked={!!form.isActive}
                             onCheckedChange={(e) => change('isActive', !!e.checked)}
+                            disabled={readOnly}
                           >
                             <HStack>
                               <Switch.Control />
@@ -1395,6 +1482,7 @@ export default function PatientDialog({
                             type="email"
                             value={form.contactEmail || ''}
                             onChange={(e) => change('contactEmail', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                         <GridItem>
@@ -1402,6 +1490,7 @@ export default function PatientDialog({
                           <Input
                             value={form.contactPhone || ''}
                             onChange={(e) => change('contactPhone', e.target.value)}
+                            disabled={readOnly}
                           />
                         </GridItem>
                       </Grid>
@@ -1421,24 +1510,27 @@ export default function PatientDialog({
                       patientName={patientName}
                       highlightAttemptId={innerAttemptId}
                       onClose={onClose}
+                      backTo={backTo}
+                      readOnly={readOnly}
                     />
                   </Tabs.Content>
 
                  <Tabs.Content value="adj">
-                    <PatientAttachmentsTab patientId={patientId} highlightAttachmentId={innerAttachmentId}/>
+                    <PatientAttachmentsTab patientId={patientId} highlightAttachmentId={innerAttachmentId} readOnly={readOnly}/>
                 </Tabs.Content>
                 <Tabs.Content value="sess">
-                <PatientSessionsTab patientId={patientId} patientName={patientName} autoOpenSessionId={innerSessionId} />
+                <PatientSessionsTab patientId={patientId} patientName={patientName} autoOpenSessionId={innerSessionId} readOnly={readOnly} />
       </Tabs.Content>
                 </VStack>
               </Tabs.Root>
             </Dialog.Body>
-
-           <Dialog.Footer bg="white" _dark={{ bg: "gray.800" }} position="sticky" bottom="0" zIndex="1" borderTopWidth="1px" borderColor="blackAlpha.200">
+            <Dialog.Footer bg="white" _dark={{ bg: "gray.800" }} position="sticky" bottom="0" zIndex="1" borderTopWidth="1px" borderColor="blackAlpha.200">
               <Button ref={cancelRef} onClick={onClose}>Cancelar</Button>
+              {!readOnly && (
               <Button colorPalette="blue" ml={2} onClick={submit}>
                 {initialValues ? 'Guardar' : 'Crear'}
               </Button>
+              )}
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Positioner>

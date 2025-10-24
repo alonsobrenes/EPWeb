@@ -1,6 +1,21 @@
 // src/api/profileApi.js
 import client from './client'
 
+function tryGetOrgId() {
+  try {
+    const fromWindow = (typeof window !== 'undefined' && window.EP_ORG_ID) ? String(window.EP_ORG_ID) : null
+    const fromLS = (typeof window !== 'undefined') ? (localStorage.getItem('orgId') || localStorage.getItem('ORG_ID')) : null
+    const fromSS = (typeof window !== 'undefined') ? (sessionStorage.getItem('orgId') || sessionStorage.getItem('ORG_ID')) : null
+    const val = fromWindow || fromLS || fromSS
+    return (val && /^[0-9a-fA-F-]{36}$/.test(val)) ? val : null
+  } catch { return null }
+}
+
+function withOrgHeader(extra = {}) {
+  const orgId = tryGetOrgId()
+  return orgId ? { ...extra, 'X-Org-Id': orgId } : { ...extra }
+}
+
 export const ProfileApi = {
   // ---- Perfil básico
   async getMe() {
@@ -34,30 +49,30 @@ export const ProfileApi = {
   },
   // ---- Etiquetas (org)
   async getLabels() {
-    const { data } = await client.get('/labels')
+    const { data } = await client.get('/labels', { headers: withOrgHeader() })
     return data // { items: [...] }
   },
   async createLabel({ code, name, colorHex, isSystem = false }) {
-    const { data } = await client.post('/labels', { code, name, colorHex, isSystem })
+    const { data } = await client.post('/labels', { code, name, colorHex, isSystem }, { headers: withOrgHeader() })
     return data // { id }
   },
   async updateLabel(id, { name, colorHex }) {
-    await client.put(`/labels/${id}`, { name, colorHex })
+    await client.put(`/labels/${id}`, { name, colorHex }, { headers: withOrgHeader() })
   },
   async deleteLabel(id) {
-    await client.delete(`/labels/${id}`)
+    await client.delete(`/labels/${id}`, { headers: withOrgHeader() })
   },
 
   // ---- Asignaciones de etiquetas
   async getLabelsFor({ type, id }) {
-    const { data } = await client.get(`/labels/for`, { params: { type, id } })
+    const { data } = await client.get(`/labels/for`, { params: { type, id } }, { headers: withOrgHeader() })
     return data // { items: [...] }
   },
   async assignLabel({ labelId, targetType, targetId }) {
-    await client.post('/labels/assign', { labelId, targetType, targetId })
+    await client.post('/labels/assign', { labelId, targetType, targetId }, { headers: withOrgHeader() })
   },
   async unassignLabel({ labelId, targetType, targetId }) {
-    await client.post('/labels/unassign', { labelId, targetType, targetId })
+    await client.post('/labels/unassign', { labelId, targetType, targetId }, { headers: withOrgHeader() })
   }
 }
 

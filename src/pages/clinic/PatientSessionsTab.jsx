@@ -23,7 +23,7 @@ function PencilIcon(props) {
   )
 }
 
-export default function PatientSessionsTab({ patientId, patientName, autoOpenSessionId = null }) {
+export default function PatientSessionsTab({ patientId, patientName, autoOpenSessionId = null, readOnly = false }) {  
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
   const [q, setQ] = useState('')
@@ -127,6 +127,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
   const [allLabels, setAllLabels] = useState([]) // org labels
   const [labelsBySession, setLabelsBySession] = useState(new Map()) // sessionId -> Array<label>
   const [assigned, setAssigned] = useState(new Set()) // ids assigned in editor
+  const [assignedListEditor, setAssignedListEditor] = useState([])
   const [labelsLoading, setLabelsLoading] = useState(false)
   const [labelsSaving, setLabelsSaving] = useState(false)
 
@@ -178,6 +179,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     setAiTidyText('')
     setAiOpinionText('')
     setAssigned(new Set())
+    setAssignedListEditor([])
     setSessionTags([])
     if (allLabels.length === 0) await fetchOrgLabels()
     setOpen(true)
@@ -203,8 +205,10 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
       const resp = await SessionsApi.getLabelsFor(s.id ?? s.sessionId ?? s.session_id)
       const mine = Array.isArray(resp?.items) ? resp.items : []
       setAssigned(new Set(mine.map(x => x.id)))
+      setAssignedListEditor(mine)
     } catch {
       setAssigned(new Set())
+      setAssignedListEditor([])
     } finally {
       setLabelsLoading(false)
     }
@@ -222,6 +226,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
     setAiTidyText('')
     setAiOpinionText('')
     setAssigned(new Set())
+    setAssignedListEditor([])
     setSessionTags([])
     setAiBusy(false)
     setSaving(false)
@@ -327,6 +332,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
 
   // Etiquetas dentro del modal
   const toggleLabel = async (lbl) => {
+    if (readOnly) return;
     const hasId = !!editing?.id
     const isOn = assigned.has(lbl.id)
 
@@ -498,7 +504,9 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
           <Button onClick={() => load(true)} variant="subtle">Actualizar</Button>
         </HStack>
         <HStack gap="2">
+          {!readOnly && (
           <Button onClick={openNew} colorPalette="brand">Nueva sesión</Button>
+          )}
           <Badge variant="subtle">{filteredItems.length} registro(s)</Badge>
         </HStack>
       </HStack>
@@ -537,9 +545,11 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                         <IconButton size="xs" variant="ghost" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => onExport(s)} isLoading={busyId === s.id}>
                           <LuDownload />
                         </IconButton>
+                        {!readOnly && (
                         <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Eliminar" title="Eliminar" onClick={() => onDelete(s)} isLoading={busyId === s.id}>
                           <LuTrash2 />
                         </IconButton>
+                        )}
                       </HStack>
                     </Table.Cell>
                   </Table.Row>
@@ -576,56 +586,82 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
               <Dialog.Header position="sticky" top="0" zIndex="1" bg="bg" borderBottomWidth="1px">
                 <Dialog.Title>{editing ? 'Editar sesión' : 'Nueva sesión'}</Dialog.Title>
               </Dialog.Header>
-
+              {readOnly && (
+                <Box px="4" py="2" bg="yellow.50" borderBottomWidth="1px">
+                  <Text fontSize="sm" color="fg.muted">Solo lectura</Text>
+                </Box>
+              )}
               <Dialog.Body flex="1" overflowY="auto" minH={0}>
                 <VStack align="stretch" gap="3">
-                  <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la sesión" />
+                  <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la sesión" disabled={readOnly}/>
 
                   {/* Etiquetas (permitir preselección en nueva sesión) */}
-                  <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
-                    <HStack justify="space-between">
-                      <Text fontWeight="medium">Etiquetas</Text>
-                      {labelsLoading && <HStack><Spinner size="sm" /><Text textStyle="sm">Cargando…</Text></HStack>}
-                    </HStack>
-                    {allLabels.length === 0 ? (
-                      <Text color="fg.muted">No hay etiquetas en la organización.</Text>
-                    ) : (
-                      <Wrap spacing="2">
-                        {allLabels.map(lbl => {
-                          const active = assigned.has(lbl.id)
-                          return (
-                            <WrapItem key={lbl.id}>
-                              <Button
-                                size="xs"
-                                variant={active ? 'solid' : 'outline'}
-                                onClick={() => toggleLabel(lbl)}
-                                isDisabled={labelsSaving}
-                                style={{
-                                  borderColor: lbl.colorHex,
-                                  background: active ? lbl.colorHex : 'transparent',
-                                  color: active ? '#fff' : 'inherit'
-                                }}
-                                title={lbl.name}
-                              >
-                                {lbl.code}
-                              </Button>
-                            </WrapItem>
-                          )
-                        })}
-                      </Wrap>
-                    )}
-                    {!editing?.id && (
-                      <Text textStyle="xs" color="fg.muted">
-                        Se asignarán al crear la sesión.
-                      </Text>
-                    )}
-                  </VStack>
+                  {(() => {
+                    const listToRender = readOnly ? assignedListEditor : allLabels
+
+                    if (readOnly && listToRender.length === 0) {
+                      return null
+                    }
+
+                    return (
+                      <VStack align="stretch" gap="2" borderWidth="1px" borderRadius="md" p="3" bg="bg.subtle">
+                        <HStack justify="space-between">
+                          <Text fontWeight="medium">Etiquetas</Text>
+                          {labelsLoading && (
+                            <HStack>
+                              <Spinner size="sm" />
+                              <Text textStyle="sm">Cargando…</Text>
+                            </HStack>
+                          )}
+                        </HStack>
+
+                        {listToRender.length === 0 ? (
+                          <Text color="fg.muted">—</Text>
+                        ) : (
+                          <Wrap spacing="2">
+                            {listToRender.map((lbl) => {
+                              const active = readOnly ? true : assigned.has(lbl.id)
+                              const disabled = !!readOnly || labelsSaving || lbl.isSystem === true
+                              return (
+                                <WrapItem key={lbl.id}>
+                                  <Button
+                                    size="xs"
+                                    variant={active ? 'solid' : 'outline'}
+                                    onClick={() => { if (!disabled) toggleLabel(lbl) }}
+                                    isDisabled={disabled}
+                                    aria-disabled={disabled}
+                                    tabIndex={disabled ? -1 : 0}
+                                    style={{
+                                      borderColor: lbl.colorHex,
+                                      background: active ? lbl.colorHex : 'transparent',
+                                      color: active ? '#fff' : 'inherit',
+                                    }}
+                                    title={lbl.name}
+                                  >
+                                    {lbl.code}
+                                  </Button>
+                                </WrapItem>
+                              )
+                            })}
+                          </Wrap>
+                        )}
+
+                        {!editing?.id && !readOnly && (
+                          <Text textStyle="xs" color="fg.muted">
+                            Se asignarán al crear la sesión.
+                          </Text>
+                        )}
+                      </VStack>
+                    )
+                  })()}
+
 
                   <Textarea
                     value={contentText}
                     onChange={(e) => setContentText(e.target.value)}
                     minH={{ base: '36vh', md: '38vh' }}
                     placeholder="Notas de sesión…"
+                    disabled={readOnly}
                   />
 
                   {/* Hashtags (editables) */}
@@ -644,7 +680,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                             <WrapItem key={t}>
                               <HStack borderWidth="1px" rounded="full" px="2" py="1">
                                 <Badge variant="subtle">#{t}</Badge>
-                                <Button size="xs" variant="ghost" onClick={() => removeTagSession(t)} disabled={anyBusy}>✕</Button>
+                                <Button size="xs" variant="ghost" onClick={() => removeTagSession(t)} disabled={anyBusy || readOnly}>✕</Button>
                               </HStack>
                             </WrapItem>
                           ))}
@@ -652,7 +688,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                       ) : (
                         <Text textStyle="sm" color="fg.muted">—</Text>
                       )}
-
+                      {!readOnly && (
                       <HStack>
                         <Input
                           placeholder="#ansiedad"
@@ -663,6 +699,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                         />
                         <Button onClick={addTagSession} disabled={anyBusy}>Añadir</Button>
                       </HStack>
+                      )}
                       <Text mt="1" textStyle="xs" color="fg.muted">
                         Formato: letras/números/_/- (2–64). Se guardan sin “#”.
                       </Text>
@@ -680,6 +717,7 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
               </Dialog.Body>
 
               <Dialog.Footer position="sticky" bottom="0" zIndex="1" bg="bg" borderTopWidth="1px">
+                {!readOnly && (
                 <HStack gap="2" flex="1">
                   <Button
                     variant="subtle"
@@ -699,8 +737,11 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                   </Button>
                   <QuotaStrip show={['ai.credits.monthly']} showHints />
                 </HStack>
+                 )}
                 <Button ref={cancelRef} variant="subtle" onClick={closeModal}>Cancelar</Button>
+                {!readOnly && (
                 <Button onClick={onSave} isLoading={saving}>{editing ? 'Guardar' : 'Crear'}</Button>
+                )}
               </Dialog.Footer>
             </Dialog.Content>
           </Dialog.Positioner>
