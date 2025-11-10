@@ -37,7 +37,7 @@ function TestAttemptLabelsSection({ patientId, attemptId, readOnly }) {
       setAllLabels(all)
 
       const assignedResp = await ProfileApi.getLabelsFor({ type: 'test_attempt', id: attemptId })
-      const mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
+      let mine = Array.isArray(assignedResp?.items) ? assignedResp.items : []
 
       if (readOnly && mine.length > 0 && all.length > 0) {
         const sameSize = mine.length === all.length

@@ -3,10 +3,10 @@ import {
   Box, Flex, HStack, VStack, IconButton, Button, Text,
   useBreakpointValue, Separator, Icon, Drawer, Avatar, Menu, Badge,Portal
 } from "@chakra-ui/react"
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { NavLink, Outlet, useLocation, useNavigate, Link } from "react-router-dom"
 import {
   LuMenu, LuLayoutDashboard, LuUsers, LuFileText, LuSettings,
-  LuChevronDown, LuChevronRight, LuFolderTree, LuUser, LuLogOut, LuClipboardList,LuCircleHelp 
+  LuChevronDown, LuChevronRight, LuFolderTree, LuUser, LuLogOut, LuClipboardList,LuCircleHelp,LuCircleDollarSign 
 } from "react-icons/lu"
 import BrandLogo from "./BrandLogo"
 import { useAuth } from "../auth/AuthProvider"
@@ -14,7 +14,8 @@ import { ROLES } from "../auth/roles"
 import { getCurrentUser, hasRole } from "../auth/session"
 import client from "../api/client"
 import GlobalSearchBar from "./GlobalSearchBar"
-import { useOrgKind } from "../context/OrgContext" // <-- NUEVO
+import { useOrgKind } from "../context/OrgContext"
+
 
 const PROFILE_ROLES = [ROLES.EDITOR]
 
@@ -38,12 +39,29 @@ const groupsSolo = [
   {
     id: "clinica",
     title: "Clínica",
-    roles: [ROLES.EDITOR, ROLES.ADMIN],
+    roles: [ROLES.EDITOR, ROLES.ADMIN,ROLES.VIEWER],
     items: [
       { to: "/app/clinic/profesionales",     label: "Profesionales",           icon: LuUsers },
       { to: "/app/clinic/pacientes",     label: "Pacientes",           icon: LuUsers },
       { to: "/app/clinic/entrevista",    label: "Primera Entrevista",  icon: LuUsers },
       { to: "/app/clinic/evaluaciones",  label: "Evaluaciones",        icon: LuClipboardList },
+    ],
+  },
+  {
+    id: "cuenta",
+    title: "Cuenta",
+    roles: [ROLES.EDITOR, ROLES.ADMIN],
+    items: [
+      { to: "/app/usersettings", label: "Configuración", icon: LuSettings},
+      { to: "/app/account/billing", label: "Facturación", icon: LuCircleDollarSign}
+    ],
+  },
+  {
+    id: "cuenta",
+    title: "Cuenta",
+    roles: [ROLES.VIEWER],
+    items: [
+      { to: "/app/usersettings", label: "Configuración", icon: LuSettings}
     ],
   },
 ]
@@ -69,8 +87,6 @@ function decodeJwtPayload() {
     return JSON.parse(json);
   } catch { return {}; }
 }
-
-
 function deriveEmailFromPayload(p) {
   return (
     p["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"] ||
@@ -86,8 +102,6 @@ function deriveRoleFromPayload(p) {
     null
   );
 }
-
-
 function getUidFromUser(user) {
   return (
     user?.email ||
@@ -100,7 +114,6 @@ function getUidFromUser(user) {
     null
   )
 }
-
 function readProfileCache(uid) {
   try {
     const s = localStorage.getItem(`ep:profile:${uid}`);
@@ -119,7 +132,6 @@ function readAvatarCache(uid) {
     return localStorage.getItem('ep:avatarUrl') || ""
   } catch { return "" }
 }
-
 function writeProfileCache(uid, payload) {
   localStorage.setItem(`ep:profile:${uid}`, JSON.stringify(payload));
   if (payload?.avatarUrl) {
@@ -127,7 +139,6 @@ function writeProfileCache(uid, payload) {
   }
   window.dispatchEvent(new Event("ep:profile-updated"));
 }
-
 function deriveInitials(nameOrEmail) {
   const s = (nameOrEmail || "").trim()
   if (!s) return "U"
@@ -136,7 +147,6 @@ function deriveInitials(nameOrEmail) {
   if (s.includes("@")) return s[0].toUpperCase()
   return s.slice(0, 2).toUpperCase()
 }
-
 function deriveUid() {
   const p = decodeJwtPayload();
   const email = deriveEmailFromPayload(p);
@@ -148,15 +158,12 @@ function deriveUid() {
     null;
   return (email || id || "").toString().toLowerCase();
 }
-
 function absUrl(u) {
   if (!u) return u;
   if (/^https?:\/\//i.test(u)) return u;
   const base = import.meta.env?.VITE_API_BASE || window.location.origin;
   return `${base}${u.startsWith("/") ? "" : "/"}${u}`;
 }
-
-
 function SidebarLink({ to, label, icon: IconComp, end, onNavigate }) {
   const location = useLocation()
   const isActive = end ? location.pathname === to : location.pathname.startsWith(to)
@@ -182,7 +189,6 @@ function SidebarLink({ to, label, icon: IconComp, end, onNavigate }) {
     </Box>
   )
 }
-
 function NavGroup({ id, title, items, defaultOpen, onNavigate }) {
   const [open, setOpen] = useState(!!defaultOpen)
   return (
@@ -205,7 +211,6 @@ function NavGroup({ id, title, items, defaultOpen, onNavigate }) {
     </Box>
   )
 }
-
 /** Unificado: usa email como UID (cache consistente entre Perfil y Sidebar) */
 function deriveDisplay(currentUser) {
   const payload = decodeJwtPayload()
@@ -245,8 +250,6 @@ function deriveDisplay(currentUser) {
     initials: deriveInitials(displayName),
   }
 }
-
-
 function UserCard({ currentUser, onLogout, onNavigateProfile }) {
   const { name, email, initials, role, avatarUrl } = deriveDisplay(currentUser)
   return (
@@ -287,8 +290,6 @@ function UserCard({ currentUser, onLogout, onNavigateProfile }) {
     </HStack>
   )
 }
-
-
 // ========= HeaderUserMenu (estilo Azure) =========
 function HeaderUserMenu({
   currentUser,
@@ -419,7 +420,6 @@ function HeaderUserMenu({
    </Menu.Root>
  )
 }
-
 function SidebarContent({ onNavigate, onLogout, currentUser, onNavigateProfile, orgKind }) {
   const location = useLocation()
 
@@ -457,11 +457,11 @@ function SidebarContent({ onNavigate, onLogout, currentUser, onNavigateProfile, 
     return map
   }, [location.pathname, visibleGroups])
 
-  const showProfileCard = useMemo(() => hasRole(currentUser, [ROLES.EDITOR]), [currentUser])
+  const showProfileCard = useMemo(() => hasRole(currentUser, [ROLES.EDITOR]) || hasRole(currentUser, [ROLES.VIEWER]), [currentUser])
 
   return (
     <Flex direction="column" h="100%" p="4" gap="3">
-      <HStack justify="center" py="0"><BrandLogo height="140px" /></HStack>
+      <HStack justify="center" py="0"><BrandLogo height="70px" /></HStack>
       <VStack align="stretch" gap="1" mt="2">
         {topLinks.map(l => <SidebarLink key={l.to} {...l} onNavigate={onNavigate} />)}
       </VStack>
@@ -571,6 +571,7 @@ export default function AppShellSidebarCollapsible() {
   const navigate = useNavigate()
   const handleLogout = () => { logout(); navigate("/login", { replace: true }) }
   const goProfile = () => navigate("/app/perfil")
+  const isOwner = String(user?.role ?? "").toLowerCase() === "editor"
   return (
     <Flex h="100svh" overflow="hidden">
       {isDesktop && (
@@ -614,12 +615,28 @@ export default function AppShellSidebarCollapsible() {
      size="sm"
      onClick={() => navigate("/app/help")}
    ><LuCircleHelp  /></IconButton>
+   
+   {/* { isOwner &&( 
+   <IconButton
+     variant="ghost"
+     aria-label="Facturación"
+     size="sm"
+     onClick={() => navigate("/app/account/billing")}
+   ><LuCircleDollarSign /></IconButton>
+   
+   )}
+   
    <IconButton
      variant="ghost"
      aria-label="Configuración"
      size="sm"
      onClick={() => navigate("/app/usersettings")}
-   ><LuSettings /></IconButton>
+   ><LuSettings /></IconButton> */}
+
+
+
+
+
    <HeaderUserMenu
      currentUser={user}
      onLogout={handleLogout}

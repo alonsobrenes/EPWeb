@@ -122,7 +122,7 @@ export default function LoginBlock() {
       <Box flex="1.5" display="flex">
         <Container maxW="md" my="auto" py={{ base: 8, md: 10 }} overflowY="auto">
           <Stack gap="8" as="form" onSubmit={handleSubmit} noValidate>
-            <BrandLogo height={{ base: "80px", md: "100px" }} mx="auto" />
+            <BrandLogo height={{ base: "200px", md: "200px" }} mx="auto" />
 
             <Stack gap={{ base: "2", md: "3" }} textAlign="center">
               <Heading size={{ base: "2xl", md: "3xl" }}>Inicia sesión</Heading>

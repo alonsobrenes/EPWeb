@@ -33,8 +33,12 @@ const ReviewSacksPage         = lazy(() => import("./pages/clinic/ReviewSacksPag
 const ReviewSacksReadOnly     = lazy(() => import("./pages/clinic/ReviewSacksReadOnly"))
 const ReviewSimpleReadOnly    = lazy(() => import("./pages/clinic/ReviewSimpleReadOnly"))
 const InterviewPage           = lazy(() => import("./pages/clinic/InterviewPage"))
-const ProfessionalsPage       = lazy(() => import("./pages/clinic/ProfessionalsPage")) // <- asegúrate de tener este import
-const InviteAcceptPage       = lazy(() => import("./pages/public/InviteAcceptPage"))
+const ProfessionalsPage       = lazy(() => import("./pages/clinic/ProfessionalsPage"))
+const InviteAcceptPage        = lazy(() => import("./pages/public/InviteAcceptPage"))
+const BillingPage             =  lazy(() => import("./pages/account/BillingPage"))
+const BillingReturn           =  lazy(() => import("./pages/account/BillingReturn"))
+const PmReturnPage           =  lazy(() => import("./pages/account/PmReturnPage"))
+
 const Fallback = <div style={{ padding: 16 }}>Cargando…</div>
 
 export default function App() {
@@ -110,7 +114,14 @@ export default function App() {
             </Suspense>
           ),
         },
-
+        {
+          path: "account/billing",
+          element: (
+            <Suspense fallback={Fallback}>
+              <BillingPage  />
+            </Suspense>
+          ),
+        },
         // ===== Clínica (profesionales) =====
         {
           path: "clinic/profesionales",
@@ -137,7 +148,7 @@ export default function App() {
         {
           path: "clinic/pacientes",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <PatientsPage />
               </Suspense>
@@ -147,7 +158,7 @@ export default function App() {
         {
           path: "clinic/evaluaciones",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <ClinicAssessmentsPage />
               </Suspense>
@@ -157,7 +168,7 @@ export default function App() {
         {
           path: "clinic/entrevista",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <InterviewPage />
               </Suspense>
@@ -169,7 +180,7 @@ export default function App() {
         {
           path: "clinic/review/:attemptId",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <ReviewSacksPage />
               </Suspense>
@@ -179,7 +190,7 @@ export default function App() {
         {
           path: "clinic/review/:attemptId/read",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <ReviewSacksReadOnly />
               </Suspense>
@@ -189,7 +200,7 @@ export default function App() {
         {
           path: "clinic/review/:attemptId/simple",
           element: (
-            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN]}>
+            <RequireAuth allowedRoles={[ROLES.EDITOR, ROLES.ADMIN, ROLES.VIEWER]}>
               <Suspense fallback={Fallback}>
                 <ReviewSimpleReadOnly />
               </Suspense>
@@ -250,6 +261,8 @@ export default function App() {
         },
       ],
     },
+    { path: "/account/billing/return", element:<BillingReturn />},
+    { path: "/account/billing/pm-return", element:<PmReturnPage />},
     { path: "/403", element: <Forbidden /> },
     { path: "/pricing", element: <Pricing /> },
     { path: "/login", element: <LoginBlock /> },
