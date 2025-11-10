@@ -83,7 +83,7 @@ function Typewriter({ phrases, speed = 28 }) {
 }
 
 /* Mockup simple */
-function DeviceFrame({ src, alt = "Vista previa de evaluacionpsicologica.org" }) {
+function DeviceFrame({ src, alt = "Vista previa de Alfa-Doc.com" }) {
   return (
     <Box position="relative" w={{ base: "full", md: "560px" }} h={{ base: "300px", md: "380px" }}
          rounded="2xl" borderWidth="1px" borderColor="blackAlpha.200" bg="white" boxShadow="lg" overflow="hidden">
@@ -115,7 +115,7 @@ export default function Landing() {
           <HStack justify="space-between">
             <HStack gap="3">
               <BrandLogo height={{ base: "34px", md: "40px" }} />
-              <Text display={{ base: "none", md: "block" }} color="fg.muted">evaluacionpsicologica.org</Text>
+              <Text display={{ base: "none", md: "block" }} color="fg.muted">alfa-doc.com</Text>
             </HStack>
             <HStack gap="2">
               {/* Solo Iniciar sesión y WhatsApp en el header */}
