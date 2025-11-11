@@ -24,6 +24,9 @@ import QuotaStrip from '../../components/billing/QuotaStrip'
 import PaywallCTA from "../../components/billing/PaywallCTA"
 import HashtagsApi from "../../api/hashtagsApi"
 import EditableInterviewHashtags from "../../components/hashtags/EditableInterviewHashtags"
+import InterviewEstimateCard from "../../components/interview/InterviewEstimateCard"
+import TranscriptProgress from "../../components/interview/TranscriptProgress"
+import StatusBadge from "../../components/common/StatusBadge"
 
 /* ======================= helpers ======================= */
 function getErrorMessage(error) {
@@ -162,6 +165,12 @@ export default function InterviewPage() {
   const [proDiag, setProDiag] = useState("")
   const [busyPro, setBusyPro] = useState(false)
   const [paywall, setPaywall] = useState(false)
+  const [lastAudioFile, setLastAudioFile] = useState(null)
+  const pollCancelRef = useRef(false)      // cancela el poll al desmontar/cambiar entrevista
+  const [isPollingTranscript, setIsPollingTranscript] = useState(false) // o
+  const [transcriptStatus, setTranscriptStatus] = useState(null)
+  const [transcriptStartedAtUtc, setTranscriptStartedAtUtc] = useState(null)
+  const fileDurationSec = null
 
   // Hashtags detectados para esta entrevista (editable)
   const [tags, setTags] = useState([])
@@ -176,6 +185,46 @@ export default function InterviewPage() {
     if (!m) return null
     return m[1].toLowerCase()
   }
+
+  // intenta obtener la transcripción ya guardada (p. ej. vía getFirstByPatient o get(id))
+  async function waitForTranscript({ interviewId, patientId, tries = 8, delayMs = 500 }) {
+    for (let i = 0; i < tries; i++) {
+      try {
+        // Si ya tienes un GET por id con el campo transcript, úsalo.
+        // Con lo que hay hoy, se puede usar el "first by patient":
+        const res = await InterviewApi.getFirstByPatient(patientId) // { transcriptText, ... }
+        console.log('res.transcriptText',res.transcriptText)
+        const t = (res && res.transcriptText) ? String(res.transcriptText) : ""
+        if (t && t.trim().length > 0) return t
+      } catch {}
+      await new Promise(r => setTimeout(r, delayMs))
+    }
+    return ""
+  }
+
+  async function pollTranscriptionStatusForever(interviewId, onTick) {
+    let delay = 1000 // 1s
+    while (!pollCancelRef.current) {
+      try {
+        const s = await InterviewApi.getTranscriptionStatus(interviewId)
+        onTick?.(s)
+
+        const status = (s?.status || "").toLowerCase()
+        if (status === "done" || status === "failed") {
+          return s // salimos solo en done/failed
+        }
+      } catch {
+        // fallos de red: tratarlos como transitorios
+      }
+
+      // esperar y subir el delay con techo 30s
+      await new Promise(r => setTimeout(r, delay))
+      if (delay < 30000) delay = Math.min(Math.round(delay * 1.5), 30000)
+    }
+    return null // cancelado (unmount / cambio de entrevista)
+  }
+
+
 
   async function loadHashtags(interviewIdToLoad) {
     if (!interviewIdToLoad) return
@@ -241,6 +290,11 @@ export default function InterviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
+  useEffect(() => {
+    pollCancelRef.current = false
+    return () => { pollCancelRef.current = true }
+  }, [interviewId])
+
   async function ensureInterview() {
     if (!patient?.id) {
       toaster.warning({ title: "Falta el paciente" })
@@ -271,6 +325,7 @@ export default function InterviewPage() {
       setBusy(true)
       const id = await ensureInterview()
       await InterviewApi.uploadAudio(id, file)
+      setLastAudioFile(file)
       toaster.success({ title: "Audio subido" })
     } catch (e) {
       const status = e?.response?.status
@@ -296,11 +351,57 @@ export default function InterviewPage() {
   async function transcribe(ev) {
     try {
       setBusyTranscript(true)
-      const id = await ensureInterview()
+      //const id = await ensureInterview()
       const force = !!(ev && (ev.altKey || ev.metaKey || ev.ctrlKey))
-      const { text, cached } = await InterviewApi.transcribe(id, { force })
-      setTranscript(text || "")
-      toaster.success({ title: cached ? "Transcripción cargada (cache)" : "Transcripción lista" })
+      const res = await InterviewApi.transcribe(interviewId, { force })
+
+      let finalText = (res?.text ?? "").trim()
+      const status = (res?.status ?? "").toLowerCase()
+
+      if (finalText) {
+        setTranscript(finalText)
+        setTranscriptStatus('done')
+        toaster.success({ title: res?.cached ? "Transcripción lista (caché)" : "Transcripción lista" })
+        return
+      }
+
+      // Si no vino texto (202 queued/processing) → polling indefinido hasta done/failed
+      if (status === "queued" || status === "processing" || !status) {
+        setIsPollingTranscript(true)
+        setTranscriptStatus(status || 'queued')
+
+        const doneOrFailed = await pollTranscriptionStatusForever(interviewId, (tick) => {
+          setTranscriptStatus(tick?.status || null)
+          setTranscriptStartedAtUtc(tick?.startedAtUtc || null)
+        })
+        setIsPollingTranscript(false)
+
+        if (doneOrFailed && (doneOrFailed.status || "").toLowerCase() === "done") {
+          const t = (doneOrFailed.text ?? "").trim()
+          if (t) {
+            setTranscript(t)
+            setTranscriptStatus('done')
+            toaster.success({ title: "Transcripción lista" })
+            return
+          }
+        }
+
+        if (doneOrFailed && (doneOrFailed.status || "").toLowerCase() === "failed") {
+          setTranscriptStatus('failed')  
+          toaster.error({
+            title: "Transcripción falló",
+            description: doneOrFailed.errorMessage || "Ocurrió un error al transcribir.",
+          })
+          return
+        }
+
+        // Si llegamos aquí, el usuario cambió de entrevista o desmontó (cancelado)
+        toaster.info({ title: "Transcripción en proceso", description: "Puedes seguir trabajando; te avisamos cuando esté lista." })
+        return
+      }
+
+      // Estado inesperado
+      toaster.info({ title: "Transcripción en proceso", description: "Aún no está disponible; continuaremos intentando." })
     } catch (e) {
       const status = e?.response?.status
       if (status === 402) {
@@ -314,7 +415,9 @@ export default function InterviewPage() {
         console.error(e)
         toaster.error({ title: "Error al transcribir" })
       }
-    } finally { setBusyTranscript(false) }
+    } finally {
+      setBusyTranscript(false)
+    }
   }
 
   async function saveTranscript() {
@@ -463,7 +566,7 @@ export default function InterviewPage() {
   }
 
   const patientName = patient ? fullName(patient) : null
-  const anyBusy = busy || busyTranscript || busyGenerate || busySave || busyPro || savingTags
+  const anyBusy = busy || busyTranscript || busyGenerate || busySave || busyPro || savingTags || isPollingTranscript
 
   return (
     <VStack align="stretch" gap="16px" p="16px">
@@ -477,6 +580,12 @@ export default function InterviewPage() {
         />
       )}
       {paywall && <PaywallCTA />}
+      <HStack justify="space-between" align="center">
+        <HStack gap="10px">
+          <Text fontWeight="semibold">Entrevista</Text>
+        </HStack>
+        {/* a la derecha puedes poner acciones: Transcribir, Forzar, etc. */}
+      </HStack>
       <Heading size="lg">Primera Entrevista</Heading>
       <QuotaStrip show={['ai.credits.monthly', 'storage.gb']} showHints/>
       <Card.Root p="16px">
@@ -542,6 +651,23 @@ export default function InterviewPage() {
           >
             {cooldown > 0 ? `Transcribir (${cooldown}s)` : "Transcribir"}
           </Button>
+          {/* Estimación informativa (no bloquea flujo) */}
+{interviewId && (
+  <Box mt="12px">
+    <InterviewEstimateCard interviewId={interviewId} file={lastAudioFile} />
+  </Box>
+)}
+ {transcriptStatus && 
+     <HStack>
+     <StatusBadge status={transcriptStatus} />
+     <TranscriptProgress
+        interviewId={interviewId}
+        status={transcriptStatus}
+        startedAtUtc={transcriptStartedAtUtc}
+        fileDurationSec={fileDurationSec}
+      />
+     </HStack>
+ }
         </HStack>
       </Card.Root>
 
