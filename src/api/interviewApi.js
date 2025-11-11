@@ -55,10 +55,14 @@ async transcribe(interviewId, { force = false } = {}) {
     return data // { saved: true }
   },
   async saveClinicianDiagnosis(interviewId, { text, close = false }) {
-  await client.put(`/clinician/interviews/${interviewId}/clinician-diagnosis`, { text, close })
-},
+    await client.put(`/clinician/interviews/${interviewId}/clinician-diagnosis`, { text, close })
+  },
   async  getFirstByPatient(patientId) {
-  const { data } = await client.get(`/clinician/interviews/patient/${patientId}/first`)
-  return data // { interviewId, startedAtUtc, status, transcriptText, draftContent }
-},
+    const { data } = await client.get(`/clinician/interviews/patient/${patientId}/first`)
+    return data // { interviewId, startedAtUtc, status, transcriptText, draftContent }
+  },
+  async getTranscriptionStatus(interviewId) {
+    const { data } = await client.get(`/clinician/interviews/${interviewId}/transcription-status`)
+    return data
+  }
 }
