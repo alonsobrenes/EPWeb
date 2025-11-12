@@ -15,7 +15,7 @@ import { getCurrentUser, hasRole } from "../auth/session"
 import client from "../api/client"
 import GlobalSearchBar from "./GlobalSearchBar"
 import { useOrgKind } from "../context/OrgContext"
-
+import  NotificationBell  from "../components/notifications/NotificationBell"
 
 const PROFILE_ROLES = [ROLES.EDITOR]
 
@@ -32,6 +32,7 @@ const groupsSolo = [
     items: [
       { to: "/app/disciplines",   label: "Disciplinas",    icon: LuFolderTree },
       { to: "/app/categories",    label: "Categorías",     icon: LuFolderTree },
+      { to: "/app/notifications", label: "Notificaciones",  icon: LuFolderTree },
       { to: "/app/subcategories", label: "Subcategorías",  icon: LuFolderTree },
       { to: "/app/tests",         label: "Evaluaciones",   icon: LuFileText },
     ],
@@ -39,7 +40,7 @@ const groupsSolo = [
   {
     id: "clinica",
     title: "Clínica",
-    roles: [ROLES.EDITOR, ROLES.ADMIN,ROLES.VIEWER],
+    roles: [ROLES.EDITOR, ROLES.VIEWER],
     items: [
       { to: "/app/clinic/profesionales",     label: "Profesionales",           icon: LuUsers },
       { to: "/app/clinic/pacientes",     label: "Pacientes",           icon: LuUsers },
@@ -50,7 +51,7 @@ const groupsSolo = [
   {
     id: "cuenta",
     title: "Cuenta",
-    roles: [ROLES.EDITOR, ROLES.ADMIN],
+    roles: [ROLES.EDITOR],
     items: [
       { to: "/app/usersettings", label: "Configuración", icon: LuSettings},
       { to: "/app/account/billing", label: "Facturación", icon: LuCircleDollarSign}
@@ -609,6 +610,7 @@ export default function AppShellSidebarCollapsible() {
           {/* <Text fontWeight="semibold">Evaluación Psicológica Integral</Text>*/}
           <GlobalSearchBar  position="relative" overflow="visible" zIndex="dropdown" onSearch={handleSearch} />
           <HStack gap="1.5">
+          <NotificationBell />
    <IconButton
      variant="ghost"
      aria-label="Ayuda"

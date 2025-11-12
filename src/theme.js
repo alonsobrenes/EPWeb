@@ -76,7 +76,7 @@ const config = defineConfig({
     // Opcional: tokens semánticos para “brand”
     semanticTokens: {
       colors: {
-        "bg.panel": { value: { _light: "brand.50",  _dark: "gray.900" } },
+        "bg.panel": { value: { _light: "white",  _dark: "gray.900" } },
       "bg.subtle":{ value: { _light: "brand.100", _dark: "gray.800" } },
       "border.subtle": { value: { _light: "brand.300", _dark: "gray.700" } },
       },
