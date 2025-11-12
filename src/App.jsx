@@ -21,6 +21,8 @@ import { useAuth } from "./auth/AuthProvider"   // <-- NUEVO
 const DisciplinesPage    = lazy(() => import("./pages/disciplines/DisciplinesPage"))
 const CategoriesPage     = lazy(() => import("./pages/categories/CategoriesPage"))
 const SubcategoriesPage  = lazy(() => import("./pages/subcategories/SubcategoriesPage"))
+const NotificationsAdminPage     = lazy(() => import("./notifications/NotificationsAdminPage"))
+
 const TestsPage          = lazy(() => import("./pages/admin/TestsPage"))
 const TestEditorPage     = lazy(() => import("./pages/admin/TestEditorPage"))
 
@@ -215,6 +217,16 @@ export default function App() {
             <RequireAuth allowedRoles={[ROLES.ADMIN]}>
               <Suspense fallback={Fallback}>
                 <DisciplinesPage />
+              </Suspense>
+            </RequireAuth>
+          ),
+        },
+        {
+          path: "notifications",
+          element: (
+            <RequireAuth allowedRoles={[ROLES.ADMIN]}>
+              <Suspense fallback={Fallback}>
+                <NotificationsAdminPage />
               </Suspense>
             </RequireAuth>
           ),
