@@ -6,7 +6,7 @@ import {
 import { NavLink, Outlet, useLocation, useNavigate, Link } from "react-router-dom"
 import {
   LuMenu, LuLayoutDashboard, LuUsers, LuFileText, LuSettings,
-  LuChevronDown, LuChevronRight, LuFolderTree, LuUser, LuLogOut, LuClipboardList,LuCircleHelp,LuCircleDollarSign 
+  LuChevronDown, LuChevronRight, LuFolderTree, LuUser, LuLogOut, LuClipboardList,LuCircleHelp,LuCircleDollarSign, LuBell,LuMessageCircle,LuBookOpen,LuNewspaper,LuMic 
 } from "react-icons/lu"
 import BrandLogo from "./BrandLogo"
 import { useAuth } from "../auth/AuthProvider"
@@ -16,6 +16,7 @@ import client from "../api/client"
 import GlobalSearchBar from "./GlobalSearchBar"
 import { useOrgKind } from "../context/OrgContext"
 import  NotificationBell  from "../components/notifications/NotificationBell"
+import  HelpButton   from "../components/help/HelpButton"
 
 const PROFILE_ROLES = [ROLES.EDITOR]
 
@@ -31,10 +32,12 @@ const groupsSolo = [
     roles: [ROLES.ADMIN],
     items: [
       { to: "/app/disciplines",   label: "Disciplinas",    icon: LuFolderTree },
-      { to: "/app/categories",    label: "Categorías",     icon: LuFolderTree },
-      { to: "/app/notifications", label: "Notificaciones",  icon: LuFolderTree },
-      { to: "/app/subcategories", label: "Subcategorías",  icon: LuFolderTree },
+      { to: "/app/categories",    label: "Categorías",     icon: LuBookOpen },
+      { to: "/app/subcategories", label: "Subcategorías",  icon: LuNewspaper },
       { to: "/app/tests",         label: "Evaluaciones",   icon: LuFileText },
+      { to: "/app/notifications", label: "Notificaciones",  icon: LuBell  },
+      { to: "/app/soporte", label: "Soporte",  icon: LuMessageCircle },
+      
     ],
   },
   {
@@ -44,7 +47,7 @@ const groupsSolo = [
     items: [
       { to: "/app/clinic/profesionales",     label: "Profesionales",           icon: LuUsers },
       { to: "/app/clinic/pacientes",     label: "Pacientes",           icon: LuUsers },
-      { to: "/app/clinic/entrevista",    label: "Primera Entrevista",  icon: LuUsers },
+      { to: "/app/clinic/entrevista",    label: "Primera Entrevista",  icon: LuMic },
       { to: "/app/clinic/evaluaciones",  label: "Evaluaciones",        icon: LuClipboardList },
     ],
   },
@@ -606,39 +609,12 @@ export default function AppShellSidebarCollapsible() {
       )}
       <Flex direction="column" flex="1" minW={0}>
         <HStack as="header"  borderBottomWidth="1px" bg="white" justify="space-between" position="sticky" top="0" zIndex="docked" overflow="visible">
-          {!isDesktop && <IconButton variant="ghost" aria-label="Abrir menú" onClick={() => setOpen(true)}><LuMenu /></IconButton>}
+          {!isDesktop && <IconButton variant="ghost" ml="2" aria-label="Abrir menú" onClick={() => setOpen(true)}><LuMenu /></IconButton>}
           {/* <Text fontWeight="semibold">Evaluación Psicológica Integral</Text>*/}
           <GlobalSearchBar  position="relative" overflow="visible" zIndex="dropdown" onSearch={handleSearch} />
-          <HStack gap="1.5">
+          <HStack gap="1">
           <NotificationBell />
-   <IconButton
-     variant="ghost"
-     aria-label="Ayuda"
-     size="sm"
-     onClick={() => navigate("/app/help")}
-   ><LuCircleHelp  /></IconButton>
-   
-   {/* { isOwner &&( 
-   <IconButton
-     variant="ghost"
-     aria-label="Facturación"
-     size="sm"
-     onClick={() => navigate("/app/account/billing")}
-   ><LuCircleDollarSign /></IconButton>
-   
-   )}
-   
-   <IconButton
-     variant="ghost"
-     aria-label="Configuración"
-     size="sm"
-     onClick={() => navigate("/app/usersettings")}
-   ><LuSettings /></IconButton> */}
-
-
-
-
-
+          <HelpButton />
    <HeaderUserMenu
      currentUser={user}
      onLogout={handleLogout}

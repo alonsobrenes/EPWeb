@@ -110,6 +110,26 @@ export default function NotificationBell() {
     setItems([])
     setCount(0)
   }
+
+  function handleNotificationAction(n) {
+    try {
+      if (!n?.actionUrl) return false
+      const url = new URL(n.actionUrl, window.location.origin)
+      if (url.pathname === "/app/help" && url.searchParams.has("ticket")) {
+        const ticketId = url.searchParams.get("ticket")
+        // Avisar globalmente al HelpButton
+        window.dispatchEvent(new CustomEvent("ep:open-help", { detail: { ticketId } }))
+        // Cerrar el popover si tienes estado/handler
+        if (setIsOpen) setIsOpen(false)
+        return true
+      }
+    } catch {
+      // si no es una URL válida, lo tratamos como navegación normal
+    }
+    return false
+  }
+
+
   return (
     <Popover.Root open={isOpen} onOpenChange={(d) => setIsOpen(d.open)}>
       <Popover.Trigger asChild>
@@ -271,10 +291,12 @@ export default function NotificationBell() {
                               colorPalette="blue"
                               mt="2"
                               as="a"
-                              href={n.actionUrl}
+                              //href={n.actionUrl}
                               onClick={() => {
                                 // opcional: marcar leído al click
                                 handleMarkRead(n.id).catch(() => {})
+                                if (handleNotificationAction(n)) return
+                                if (n.actionUrl) window.location.assign(n.actionUrl)
                               }}
                             >
                               {n.actionLabel}
