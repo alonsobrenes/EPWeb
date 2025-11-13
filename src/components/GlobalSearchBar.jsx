@@ -169,7 +169,7 @@ export default function GlobalSearchBar({ defaultTypes = [], onSearch }) {
   const allKeys = ALL_TYPES.map(t => t.key)
 
   return (
-    <HStack ml="25%" gap="10px" align="stretch" position="relative" padding={5}>
+    <HStack ml={["0", "0", "0", "25%"]} gap="10px" align="stretch" position="relative" padding={5}>
       <Input
         ref={inputRef}
         placeholder="Busca por texto, #hashtag, label:code…"

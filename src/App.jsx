@@ -22,6 +22,7 @@ const DisciplinesPage    = lazy(() => import("./pages/disciplines/DisciplinesPag
 const CategoriesPage     = lazy(() => import("./pages/categories/CategoriesPage"))
 const SubcategoriesPage  = lazy(() => import("./pages/subcategories/SubcategoriesPage"))
 const NotificationsAdminPage     = lazy(() => import("./notifications/NotificationsAdminPage"))
+const TicketsAdminPage     = lazy(() => import("./support/TicketsAdminPage"))
 
 const TestsPage          = lazy(() => import("./pages/admin/TestsPage"))
 const TestEditorPage     = lazy(() => import("./pages/admin/TestEditorPage"))
@@ -227,6 +228,16 @@ export default function App() {
             <RequireAuth allowedRoles={[ROLES.ADMIN]}>
               <Suspense fallback={Fallback}>
                 <NotificationsAdminPage />
+              </Suspense>
+            </RequireAuth>
+          ),
+        },
+        {
+          path: "soporte",
+          element: (
+            <RequireAuth allowedRoles={[ROLES.ADMIN]}>
+              <Suspense fallback={Fallback}>
+                <TicketsAdminPage />
               </Suspense>
             </RequireAuth>
           ),
