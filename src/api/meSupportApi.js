@@ -56,3 +56,8 @@ export async function closeTicket(ticketId) {
   })
 }
 
+export async function listOrgTickets() {
+  const { data } = await client.get(`${base}/org-tickets`)
+  return data
+}
+
