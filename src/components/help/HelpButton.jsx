@@ -12,13 +12,15 @@ import {
   VStack,
   Dialog,
   Badge,
-  Tabs,          // 👈 igual que en BillingPage
+  Tabs,
+  Table,
   Separator,     // 👈 igual que en BillingPage
 } from "@chakra-ui/react"
 import { LuCircleHelp, LuFile, LuFileText, LuImage } from "react-icons/lu"
 import { keyframes } from "@emotion/react"
-import { createTicket, listMyTickets, getTicket, replyTicket, uploadAttachment, closeTicket } from "../../api/meSupportApi"
+import { createTicket, listMyTickets, getTicket, replyTicket, uploadAttachment, closeTicket, listOrgTickets } from "../../api/meSupportApi"
 import { toaster } from "../ui/toaster"
+import dayjs from "dayjs"
 
 export default function HelpButton() {
   const [open, setOpen] = useState(false)
@@ -42,6 +44,13 @@ export default function HelpButton() {
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [replyText, setReplyText] = useState("")
   const [sendingReply, setSendingReply] = useState(false)
+  const [orgTickets, setOrgTickets] = useState([])
+  const [loadingOrgTickets, setLoadingOrgTickets] = useState(false)
+  const [orgTicketsLoaded, setOrgTicketsLoaded] = useState(false)
+  const [orgTicketsError, setOrgTicketsError] = useState(null)
+  const [canSeeOrgTickets, setCanSeeOrgTickets] = useState(false)
+
+
   const messagesEndRef = useRef(null)
   const isClosed = selectedTicket?.status === "closed"
   // shimmer para “skeleton”
@@ -91,6 +100,21 @@ export default function HelpButton() {
   }
 
   useEffect(() => {
+  async function checkOrgAccess() {
+    try {
+      await listOrgTickets()   // <-- el mismo que ya usas en el tab
+      setCanSeeOrgTickets(true)
+    } catch (err) {
+      setCanSeeOrgTickets(false)
+    }
+  }
+
+  if (open) {
+    checkOrgAccess()
+  }
+}, [open])
+
+  useEffect(() => {
     function onOpenHelp(e) {
       const ticketId = e?.detail?.ticketId
       setOpen(true)
@@ -114,9 +138,6 @@ export default function HelpButton() {
   } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [])
-
-
-
 
    // al abrir, si la pestaña actual es "tickets", carga
   useEffect(() => {
@@ -168,7 +189,6 @@ export default function HelpButton() {
       toaster.error({ title: "No fue posible cerrar el ticket" })
     }
   }
-
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -247,7 +267,6 @@ export default function HelpButton() {
     return <LuFile size={14} />
   }
 
-
   async function onAttachmentSelected(e) {
     const file = e.target.files?.[0]
     if (!file || !selectedTicket) return
@@ -267,6 +286,29 @@ export default function HelpButton() {
     }
   }
 
+  async function loadOrgTickets() {
+    setLoadingOrgTickets(true)
+    setOrgTicketsError(null)
+    try {
+      const data = await listOrgTickets()
+      setOrgTickets(data || [])
+      setOrgTicketsLoaded(true)
+    } catch (err) {
+      console.error(err)
+      const status = err?.response?.status
+      if (status === 403) {
+        setOrgTicketsError(
+          "Esta vista está disponible solo para dueños de una organización de tipo clínica."
+        )
+      } else {
+        setOrgTicketsError(
+          "No fue posible cargar los tickets de tu organización."
+        )
+      }
+    } finally {
+      setLoadingOrgTickets(false)
+    }
+  }
 
   useEffect(() => {
     if (selectedTicket) {
@@ -336,12 +378,22 @@ export default function HelpButton() {
             {/* Tabs v3 — MISMO PATRÓN QUE BillingPage */}
             <Tabs.Root
               value={tabValue}
-              onValueChange={(e) => setTabValue(e.value)}
+              onValueChange={(e) =>{
+                            const value = e.value
+                            setTabValue(e.value)
+                            if (value === "org" && !orgTicketsLoaded && !loadingOrgTickets) {
+                                loadOrgTickets()
+                              }
+                             }
+                        }
               variant="line"
             >
               <Tabs.List px="4" pt="3" gap="2">
                 <Tabs.Trigger value="report">Reportar</Tabs.Trigger>
                 <Tabs.Trigger value="tickets">Mis tickets</Tabs.Trigger>
+                {canSeeOrgTickets && (
+                  <Tabs.Trigger value="org">Tickets de mi organización</Tabs.Trigger>
+                )}
               </Tabs.List>
 
               <Separator my="2" />
@@ -667,7 +719,7 @@ export default function HelpButton() {
                                                               setSelectedTicket(null)
                                                               setTicketAttachments([])
                                                             }}>
-                                      ← Volver a mis tickets
+                                      ← Volver a la lista de tickets
                                     </Button>
                                     <HStack gap="2">
                                     {!isClosed && (
@@ -702,6 +754,138 @@ export default function HelpButton() {
                         </VStack>
                       )}
                 </Tabs.Content>
+                {canSeeOrgTickets && ( <Tabs.Content value="org">
+  <VStack align="stretch" gap="3" pt="3">
+    <Text fontWeight="semibold">Tickets de mi organización</Text>
+
+    {loadingOrgTickets && (
+      <VStack align="stretch" gap="3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Box
+            key={i}
+            borderWidth="1px"
+            borderColor="border"
+            rounded="md"
+            p="12px"
+            bg="bg.subtle"
+          >
+            <Box
+              h="10px"
+              w="60%"
+              mb="8px"
+              rounded="sm"
+              bg="bg.muted"
+              style={{
+                animation: `${shimmer} 1.6s linear infinite`,
+              }}
+            />
+            <Box
+              h="8px"
+              w="90%"
+              mb="6px"
+              rounded="sm"
+              bg="bg.muted"
+              style={{
+                animation: `${shimmer} 1.6s linear infinite`,
+              }}
+            />
+            <Box
+              h="8px"
+              w="70%"
+              rounded="sm"
+              bg="bg.muted"
+              style={{
+                animation: `${shimmer} 1.6s linear infinite`,
+              }}
+            />
+          </Box>
+        ))}
+      </VStack>
+    )}
+
+    {!loadingOrgTickets && orgTicketsError && (
+      <Box borderWidth="1px" borderColor="border" p="12px" rounded="md" bg="bg.subtle">
+        <Text color="fg.muted">{orgTicketsError}</Text>
+      </Box>
+    )}
+
+    {!loadingOrgTickets && !orgTicketsError && orgTickets.length === 0 && (
+      <Box borderWidth="1px" borderColor="border" p="12px" rounded="md" bg="bg.subtle">
+        <Text color="fg.muted">
+          No hay tickets registrados para tu organización todavía.
+        </Text>
+      </Box>
+    )}
+
+    {!loadingOrgTickets && !orgTicketsError && orgTickets.length > 0 && (
+      <VStack align="stretch" gap="3">
+        {orgTickets.map((t) => {
+          const statusColor =
+            t.status === "open"
+              ? "blue"
+              : t.status === "in_progress"
+              ? "yellow"
+              : t.status === "resolved"
+              ? "green"
+              : "gray"
+
+          return (
+            <Box
+              key={t.id}
+              borderWidth="1px"
+              borderColor="border"
+              rounded="md"
+              p="12px"
+              bg="bg.subtle"
+              onClick={() => {
+                // Reutilizamos el panel de detalle de “Mis tickets”
+                setTabValue("tickets")
+                loadTicketDetail(t.id)
+              }}
+              cursor="pointer"
+              _hover={{ bg: "bg.muted" }}
+            >
+              <HStack justify="space-between" align="start" mb="1">
+                <Text fontWeight="semibold" noOfLines={1}>
+                  {t.subject}
+                </Text>
+                <HStack gap="2">
+                  {t.priority && (
+                    <Badge colorPalette="gray">{t.priority}</Badge>
+                  )}
+                  <Badge colorPalette={statusColor}>{t.status}</Badge>
+                </HStack>
+              </HStack>
+
+              {/* Línea de categoría si la tienes */}
+              <Text color="fg.muted" textStyle="xs" mb="1">
+                {t.category || "Sin categoría"}
+              </Text>
+
+              {/* Quién abrió el ticket */}
+              <Text color="fg.muted" textStyle="xs" mb="1">
+                Reportado por: {t.createdByName || t.createdByEmail || "—"}
+              </Text>
+
+              {/* Fechas, mismo estilo que “Mis tickets” */}
+              <Text color="fg.muted" textStyle="xs">
+                Creado: {new Date(t.createdAtUtc).toLocaleString()}
+                {t.lastMessageAtUtc
+                  ? ` · Última actividad: ${new Date(
+                      t.lastMessageAtUtc
+                    ).toLocaleString()}`
+                  : ""}
+              </Text>
+            </Box>
+          )
+        })}
+      </VStack>
+    )}
+  </VStack>
+</Tabs.Content>
+
+)}
+
               </Box>
             </Tabs.Root>
           </Dialog.Content>

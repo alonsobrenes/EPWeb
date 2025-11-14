@@ -232,6 +232,7 @@ export default function TicketsAdminPage() {
                 <Box key={r.id} borderTopWidth="1px" _first={{ borderTopWidth: "0px" }}>
                   <HStack p="2" _hover={{ bg: "bg.muted" }} cursor="pointer" onDoubleClick={() => onOpen(r)}>
                     <Box flex="1">
+                      { r.orgId != null && <Badge colorPalette={statusColor}>org</Badge>}
                       <Text noOfLines={1}>{r.openedBy.orgLegalName}</Text>
                       <Text textStyle="xs" color="fg.muted">{r.openedBy.email ?? "—"}</Text>
                       </Box>
