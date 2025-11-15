@@ -18,6 +18,7 @@ import PaywallCTA from "../../components/billing/PaywallCTA"
 import { ProfileApi } from '../../api/profileApi'
 import PatientSessionsTab from './PatientSessionsTab'
 import EditableInterviewHashtags from "../../components/hashtags/EditableInterviewHashtags"
+import PatientConsentTab from './PatientConsentTab'
 
 function FieldLabel({ children }) {
   return <Text textStyle="sm" color="fg.muted" mb="1">{children}</Text>
@@ -1382,6 +1383,7 @@ export default function PatientDialog({
               >
                 <Tabs.List>
                   <Tabs.Trigger value="datos">Datos</Tabs.Trigger>
+                  <Tabs.Trigger value="consent" disabled={!hasId}>Consentimiento</Tabs.Trigger>
                   <Tabs.Trigger value="inter" disabled={!hasId}>Entrevista</Tabs.Trigger>
                   <Tabs.Trigger value="hist" disabled={!hasId}>Historial</Tabs.Trigger>
                   <Tabs.Trigger value="adj" disabled={!hasId}>Archivos Adjuntos</Tabs.Trigger>
@@ -1496,6 +1498,14 @@ export default function PatientDialog({
                       </Grid>
                     </VStack>
                   </Tabs.Content>
+
+                  <Tabs.Content value="consent">
+                    <PatientConsentTab
+                    patientId={patientId}
+                    patientName={patientName}
+                    readOnly={readOnly}
+                    />
+                    </Tabs.Content>
 
                   <Tabs.Content value="inter">
                     <PatientFirstInterviewTab
