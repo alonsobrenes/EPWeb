@@ -37,7 +37,14 @@ const groupsSolo = [
       { to: "/app/tests",         label: "Evaluaciones",   icon: LuFileText },
       { to: "/app/notifications", label: "Notificaciones",  icon: LuBell  },
       { to: "/app/soporte", label: "Soporte",  icon: LuMessageCircle },
-      
+    ],
+  },
+  {
+    id: "org",
+    title: "Organización",
+    roles: [ROLES.EDITOR],
+    items: [
+      { to: "/app/clinic/profesionales",     label: "Profesionales",           icon: LuUsers },
     ],
   },
   {
@@ -45,7 +52,6 @@ const groupsSolo = [
     title: "Clínica",
     roles: [ROLES.EDITOR, ROLES.VIEWER],
     items: [
-      { to: "/app/clinic/profesionales",     label: "Profesionales",           icon: LuUsers },
       { to: "/app/clinic/pacientes",     label: "Pacientes",           icon: LuUsers },
       { to: "/app/clinic/entrevista",    label: "Primera Entrevista",  icon: LuMic },
       { to: "/app/clinic/evaluaciones",  label: "Evaluaciones",        icon: LuClipboardList },
