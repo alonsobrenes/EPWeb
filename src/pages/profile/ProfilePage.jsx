@@ -7,7 +7,7 @@ import {
 import { ProfileApi } from "../../api/profileApi"
 import { DisciplinesApi } from "../../api/disciplinesApi"
 import { toaster } from "../../components/ui/toaster"
-import { apiOrigin } from "../../api/client"
+import { absolutizeApiUrl } from "../../utils/url"
 // BEGIN CHANGE: nuevo componente con la configuración de etiquetas
 import UserSettings from "./UserSettings"
 // END CHANGE
@@ -50,14 +50,6 @@ function persistProfileCache(meLike) {
   } catch {}
   // Notificar al shell para que refresque
   try { window.dispatchEvent(new Event("ep:profile-updated")) } catch {}
-}
-
-// Convierte una URL relativa del API ("/uploads/...") a absoluta
-function absolutizeApiUrl(url) {
-  if (!url) return ""
-  if (/^https?:\/\//i.test(url)) return url
-  const origin = apiOrigin()
-  return origin ? origin + (url.startsWith("/") ? "" : "/") + url : url
 }
 
 function deriveDisplay(me) {
@@ -138,7 +130,6 @@ export default function ProfilePage() {
   }, [])
 
   const { name, email, initials, role, avatarUrl } = deriveDisplay(me)
-
   async function onPickFile(e) {
     const file = e.target.files?.[0]
     if (!file) return

@@ -15,7 +15,7 @@ import { absolutizeApiUrl } from "../utils/url"
  */
 export default function UserAvatar({ user, size = "md", ring = true }) {
   const [broken, setBroken] = useState(false)
-  const src = useMemo(() => {
+  const src = useMemo(() => {    
     if (!user?.avatarUrl || broken) return undefined
     const base = absolutizeApiUrl(user?.avatarUrl || '/uploads/avatars/default.png')
     // Si hay updatedAt lo usamos como versión; si no, un token estable por sesión.

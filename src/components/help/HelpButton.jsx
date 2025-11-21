@@ -21,6 +21,8 @@ import { keyframes } from "@emotion/react"
 import { createTicket, listMyTickets, getTicket, replyTicket, uploadAttachment, closeTicket, listOrgTickets } from "../../api/meSupportApi"
 import { toaster } from "../ui/toaster"
 import dayjs from "dayjs"
+import api from "../../api/client"
+import { absolutizeApiUrl } from "../../utils/url"
 
 export default function HelpButton() {
   const [open, setOpen] = useState(false)
@@ -49,7 +51,7 @@ export default function HelpButton() {
   const [orgTicketsLoaded, setOrgTicketsLoaded] = useState(false)
   const [orgTicketsError, setOrgTicketsError] = useState(null)
   const [canSeeOrgTickets, setCanSeeOrgTickets] = useState(false)
-
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null)
 
   const messagesEndRef = useRef(null)
   const isClosed = selectedTicket?.status === "closed"
@@ -285,6 +287,54 @@ export default function HelpButton() {
       setUploadingAttachment(false)
     }
   }
+  
+  async function onDownloadAttachment(a, e) {
+    if (e && e.preventDefault) e.preventDefault()
+    if (!a?.uri) {
+      toaster.error({ title: "El adjunto no tiene una URL válida" })
+      return
+    }
+
+    const url = absolutizeApiUrl(a.uri)
+    setDownloadingAttachmentId(a.id)
+
+    try {
+      const response = await api.get(url, {
+        responseType: "blob",
+      })
+
+      const blob = new Blob([response.data])
+      const downloadUrl = window.URL.createObjectURL(blob)
+
+      // Intentar extraer filename del header si viene
+      let fileName = a.fileName || "archivo"
+      const cd = response.headers?.["content-disposition"] || response.headers?.["Content-Disposition"]
+      if (cd) {
+        const match = /filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i.exec(cd)
+        if (match && match[1]) {
+          try {
+            fileName = decodeURIComponent(match[1])
+          } catch {
+            fileName = match[1]
+          }
+        }
+      }
+
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (err) {
+      console.error(err)
+      toaster.error({ title: "No fue posible descargar el adjunto" })
+    } finally {
+      setDownloadingAttachmentId(null)
+    }
+  }
+
 
   async function loadOrgTickets() {
     setLoadingOrgTickets(true)
@@ -660,8 +710,7 @@ export default function HelpButton() {
                                         {getAttachmentIcon(a.mimeType)}
                                         <a
                                           href={a.uri}
-                                          target="_blank"
-                                          rel="noreferrer"
+                                          onClick={(e) => onDownloadAttachment(a, e)}
                                           style={{ textDecoration: "underline" }}
                                         >
                                           {a.fileName}
