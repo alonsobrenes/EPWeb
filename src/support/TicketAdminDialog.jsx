@@ -12,7 +12,9 @@ import {
   Portal,
 } from "@chakra-ui/react"
 import { getTicketAdmin, patchTicketAdmin, replyTicketAdmin, deleteAttachmentAdmin } from "../api/adminSupportApi"
+import api from "../api/client"
 import { toaster } from "../components/ui/toaster"
+import { absolutizeApiUrl } from "../utils/url"
 import { LuFile, LuFileText, LuImage } from "react-icons/lu"
 export default function TicketAdminDialog({
   open,
@@ -28,7 +30,7 @@ export default function TicketAdminDialog({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [ticket, setTicket] = useState(null) // { id, subject, status, ... , messages: [], attachments: [] }
-
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null)
   const [status, setStatus] = useState(initialStatus || "open")
   const [assignee, setAssignee] = useState(assignedToUserId ?? "")
   const [reply, setReply] = useState("")
@@ -145,6 +147,53 @@ export default function TicketAdminDialog({
     }
   }
 
+  async function onDownloadAttachment(a, e) {
+    if (e && e.preventDefault) e.preventDefault()
+    if (!a?.uri) {
+      toaster.error({ title: "El adjunto no tiene una URL válida" })
+      return
+    }
+
+    const url = absolutizeApiUrl(a.uri)
+    setDownloadingAttachmentId(a.id)
+
+    try {
+      const response = await api.get(url, {
+        responseType: "blob",
+      })
+
+      const blob = new Blob([response.data])
+      const downloadUrl = window.URL.createObjectURL(blob)
+
+      // Intentar extraer filename del header si viene
+      let fileName = a.fileName || "archivo"
+      const cd = response.headers?.["content-disposition"] || response.headers?.["Content-Disposition"]
+      if (cd) {
+        const match = /filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i.exec(cd)
+        if (match && match[1]) {
+          try {
+            fileName = decodeURIComponent(match[1])
+          } catch {
+            fileName = match[1]
+          }
+        }
+      }
+
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+    } catch (err) {
+      console.error(err)
+      toaster.error({ title: "No fue posible descargar el adjunto" })
+    } finally {
+      setDownloadingAttachmentId(null)
+    }
+  }
+
   function getAttachmentIcon(mimeType) {
     if (!mimeType) return <LuFile size={14} />
 
@@ -154,7 +203,6 @@ export default function TicketAdminDialog({
 
     return <LuFile size={14} />
   }
-
 
   const statusValue = ticket?.status || status
   const statusColor =
@@ -357,9 +405,8 @@ export default function TicketAdminDialog({
                             <HStack gap="2" align="center">
                             {getAttachmentIcon(a.mimeType)}
                             <a
-                              href={a.uri}
-                              target="_blank"
-                              rel="noreferrer"
+                              href={ absolutizeApiUrl(a.uri)}
+                              onClick={(e) => onDownloadAttachment(a, e)}
                               style={{ textDecoration: "underline" }}
                             >
                               {a.fileName}
@@ -369,6 +416,11 @@ export default function TicketAdminDialog({
                                 ? `${(a.sizeBytes / 1024).toFixed(1)} KB`
                                 : ""}
                             </Text>
+                            {downloadingAttachmentId === a.id && (
+                                <Text textStyle="2xs" color="fg.muted">
+                                  Descargando…
+                                </Text>
+                              )}
                             </HStack>
                             <Button
                                 size="xs"

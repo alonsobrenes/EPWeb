@@ -22,7 +22,6 @@ export const PatientConsentsApi = {
     },
 
     // POST /api/patients/{patientId}/consent
-    // (No lo vamos a usar todavía, pero lo dejamos listo)
     async create(patientId, payload) {
         if (!patientId) throw new Error('patientId es requerido')
         const {

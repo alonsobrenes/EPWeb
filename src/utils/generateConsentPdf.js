@@ -51,7 +51,7 @@ function normalizeConsentText(raw) {
   return text.trim()
 }
 
-export function generateConsentPdf({ patient, consent }) {
+export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const marginLeft = 40
   const marginRight = 40
@@ -236,7 +236,7 @@ export function generateConsentPdf({ patient, consent }) {
       const imgY = lineY - imgHeight - 10
 
       doc.addImage(
-        consent.signatureUri,
+        signatureImageBase64,
         "PNG",
         imgX,
         imgY,

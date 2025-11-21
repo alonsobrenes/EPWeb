@@ -14,6 +14,7 @@ import {
 import PatientConsentsApi from "../../api/patientConsentsApi";
 import { generateConsentPdf } from "../../utils/generateConsentPdf"
 import { toaster } from "../../components/ui/toaster";
+import api from "../../api/client";
 
 function FieldLabel({ children }) {
   return (
@@ -372,6 +373,10 @@ export default function PatientConsentTab({
   const [accepted, setAccepted] = useState(false);
   const [signatureData, setSignatureData]= useState(null)
   const [canvasSize, setCanvasSize] = useState({ width: 300, height: 150 });
+  const [signatureImageUrl, setSignatureImageUrl] = useState(null);
+  const [loadingSignatureImage, setLoadingSignatureImage] = useState(false);
+  const [signatureImageBase64, setSignatureImageBase64] = useState(null);
+
   const RELATIONSHIP_OPTIONS = [
     { value: "paciente", label: "Paciente (el mismo)" },
     { value: "madre", label: "Madre" },
@@ -414,6 +419,73 @@ export default function PatientConsentTab({
       alive = false;
     };
   }, [patientId]);
+
+    // Resolver la firma: base64 (viejos) o Azurite vía API (nuevos)
+  useEffect(() => {
+      let alive = true;
+      let objectUrl = null;
+
+      setSignatureImageUrl(null);
+
+      if (!consent || !consent.signatureUri) {
+        setLoadingSignatureImage(false);
+        return;
+      }
+
+      // Caso 1: consentimientos antiguos con data:image/png;base64,...
+      if (consent.signatureUri.startsWith("data:image/")) {
+        setSignatureImageBase64(consent.signatureUri);
+        setSignatureImageUrl(consent.signatureUri);
+        setLoadingSignatureImage(false);
+        return;
+      }
+
+      // Caso 2: nuevos consentimientos -> la firma vive en Azurite
+      setLoadingSignatureImage(true);
+
+      (async () => {
+        try {
+          const response = await api.get(
+            `/patients/${consent.patientId}/consent/${consent.id}/signature`,
+            { responseType: "blob" }
+          );
+
+          if (!alive) return;
+
+          const blob = response.data;
+          const reader = new FileReader();
+          reader.onloadend = function () {
+              if (alive) {
+                  setSignatureImageBase64(reader.result); // esto será data:image/png;base64,...
+              }
+          };
+          reader.readAsDataURL(blob);
+
+          objectUrl = URL.createObjectURL(blob);
+          setSignatureImageUrl(objectUrl);
+
+          //objectUrl = URL.createObjectURL(response.data);
+          //setSignatureImageUrl(objectUrl);
+        } catch (err) {
+          console.error("Error cargando imagen de firma de consentimiento:", err);
+          if (alive) {
+            setSignatureImageUrl(null);
+          }
+        } finally {
+          if (alive) {
+            setLoadingSignatureImage(false);
+          }
+        }
+      })();
+
+      return () => {
+        alive = false;
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+        }
+      };
+    }, [consent]);
+
 
   const isValidSignature =
     !!patientId &&
@@ -664,6 +736,7 @@ export default function PatientConsentTab({
                 id: consent.patientId,
               },
               consent,
+              signatureImageBase64
             })
             const url = URL.createObjectURL(blob)
             const win = window.open(url, "_blank")
@@ -714,28 +787,40 @@ export default function PatientConsentTab({
         </Text>
       )}
 
-      {consent.signatureUri && (
+            {(signatureImageUrl || loadingSignatureImage) && (
         <VStack align="flex-start" gap="2">
-            <Text textStyle="xs" color="fg.muted">
+          <Text textStyle="xs" color="fg.muted">
             Firma registrada digitalmente:
-            </Text>
+          </Text>
 
-            <Box
-            as="img"
-            src={consent.signatureUri}
-            alt="Firma del consentimiento"
-            maxH="120px"
-            borderRadius="md"
-            borderWidth="1px"
-            bg="white"
-            />
+          {loadingSignatureImage && !signatureImageUrl ? (
+            <HStack gap="2">
+              <Spinner size="xs" />
+              <Text textStyle="xs" color="fg.muted">
+                Cargando firma…
+              </Text>
+            </HStack>
+          ) : (
+            signatureImageUrl && (
+              <Box
+                as="img"
+                src={signatureImageUrl}
+                alt="Firma del consentimiento"
+                maxH="120px"
+                borderRadius="md"
+                borderWidth="1px"
+                bg="white"
+              />
+            )
+          )}
 
-            <Text textStyle="xs" color="fg.muted">
+          <Text textStyle="xs" color="fg.muted">
             La firma del consentimiento se encuentra almacenada de forma segura
             como parte del expediente clínico electrónico.
-            </Text>
+          </Text>
         </VStack>
-        )}
+      )}
+
     </VStack>
   );
 }
