@@ -542,9 +542,9 @@ export default function PatientSessionsTab({ patientId, patientName, autoOpenSes
                         <IconButton size="xs" variant="ghost" aria-label="Editar" title="Editar" onClick={() => openEdit(s)}>
                           <PencilIcon />
                         </IconButton>
-                        <IconButton size="xs" variant="ghost" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => onExport(s)} isLoading={busyId === s.id}>
+                        {/* <IconButton size="xs" variant="ghost" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => onExport(s)} isLoading={busyId === s.id}>
                           <LuDownload />
-                        </IconButton>
+                        </IconButton> */}
                         {!readOnly && (
                         <IconButton size="xs" variant="ghost" colorPalette="red" aria-label="Eliminar" title="Eliminar" onClick={() => onDelete(s)} isLoading={busyId === s.id}>
                           <LuTrash2 />

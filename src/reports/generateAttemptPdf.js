@@ -1,365 +1,426 @@
-// src/reports/generateAttemptPdf.js
-import jsPDF from "jspdf";
+// src/utils/generateAttemptPdf.js
+import { createBaseReport } from "./reportTemplate"
+import { tryGetOrgId } from "../utils/identity"
 
 /**
- * args:
- *  - scoringMode: 'clinician' | 'automatic'
- *  - patientName, patientId, testName, attemptId, dateIso
- *  - answers: arreglo crudo (compatibilidad)
- *  - pdfModel:
- *      kind: 'general' | 'triads' | 'sacks'
- *      general: { columns: string[], rows: {code,text,marks:{label->true},openText}[] }
- *      triads:  { rows: {code, optionTexts:[a,b,c], marks:[bool,bool,bool]}[] }
- *      sacks:   { sections: {code,name,rows:{code,text,answerText}[]}[] }
+ * Genera un PDF con los resultados de un intento de test psicológico.
+ *
+ * @param {object} args
+ * @param {string} args.scoringMode - 'auto', 'clinician', etc.
+ * @param {string} args.patientName
+ * @param {string|number} args.patientId
+ * @param {string} args.testName
+ * @param {string|number} args.attemptId
+ * @param {string} args.dateIso - ISO string de la fecha del intento
+ * @param {Array<object>} args.answers - respuestas crudas (ClinicianApi.getAttemptAnswers)
+ * @param {object|null} args.pdfModel - modelo opcional (por ejemplo SACKS)
+ * @param {object|null} args.results - { totalRaw, totalPercent, totalMax?, totalMin?, scales? }
+ * @param {boolean} [args.includeAnswers] - si true, agrega Sección II con respuestas
  */
-export async function generateAttemptPdf(args) {
+export function generateAttemptPdf({
+  scoringMode,
+  patientName,
+  patientId,
+  testName,
+  attemptId,
+  dateIso,
+  answers,
+  pdfModel,
+  results,
+  includeAnswers,
+}) {
+  const orgId = tryGetOrgId()
+  const orgLogoBase64 = orgId
+    ? localStorage.getItem(`ep:logo:${orgId}`)
+    : null
+  const safePatientName = (patientName || "").trim() || "(sin nombre)"
+  const safePatientId =
+    (patientId != null && String(patientId).trim()) || "(sin identificación)"
+
+  const testTitle =
+    (testName || "").trim() || "Resultado de prueba psicológica"
+
+  const dt = dateIso ? new Date(dateIso) : new Date()
+  const attemptDateText = dt.toLocaleString()
+
+  const scoringLabel = (() => {
+    if (!scoringMode) return ""
+    const s = String(scoringMode).toLowerCase()
+    if (s === "auto" || s === "automatic") return "Puntuación automática"
+    if (s === "clinician") return "Puntuación clínica"
+    return `Modo de puntuación: ${scoringMode}`
+  })()
+
+  // ---------------------------
+  // PLANTILLA BASE (LOGO + TÍTULO + ENCABEZADO)
+  // ---------------------------
   const {
-    scoringMode = "automatic",
-    patientName = "",
-    patientId = "",
-    testName = "Evaluación",
-    attemptId = "",
-    dateIso = new Date().toISOString(),
-    pdfModel,
-  } = args || {};
+    doc,
+    marginLeft,
+    maxWidth,
+    pageHeight,
+    y: startY,
+  } = createBaseReport({
+    title: testTitle,
+    subtitle: scoringLabel || "Informe de resultados de prueba psicológica",
+    orgName: undefined, // deja que el template use alfa-doc.com por defecto
+    orgLogoBase64,
+    infoRows: [
+      {
+        label: "Nombre de la persona evaluada:",
+        value: safePatientName,
+      },
+      {
+        label: "Identificación:",
+        value: safePatientId,
+      },
+      {
+        label: "Fecha del intento:",
+        value: attemptDateText,
+      },
+      {
+        label: "ID del intento:",
+        value: String(attemptId || ""),
+      },
+      scoringLabel
+        ? {
+            label: "Modo de puntuación:",
+            value: scoringLabel,
+          }
+        : null,
+    ].filter(Boolean),
+  })
+  let y = startY
 
-  const doc = new jsPDF({ unit: "mm", format: "letter" }); // 216 x 279.4 mm aprox
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-
-  // ==== estilos ====
-  const M = { l: 14, r: 14, t: 16, b: 16 };
-  const GRID = "#e3e3e3";
-  const HEADER_BG = "#efefef";
-  const HEADER_TX = [0, 0, 0];
-
-  // util: fecha legible
-  const dateText = new Date(dateIso).toLocaleString();
-
-  // util: dividir texto según ancho
-  function wrap(text, width, fontSize = 10) {
-    doc.setFontSize(fontSize);
-    const t = (text || "").toString();
-    return doc.splitTextToSize(t, width);
+  // Helper para salto de página
+  const ensureSpace = (docInstance, currentY, extra = 40) => {
+    const effectiveHeight = pageHeight - 60 // margen inferior
+    if (currentY + extra <= effectiveHeight) return currentY
+    docInstance.addPage()
+    return 40
   }
-  function lineHeight(fontSize = 10) {
-    return fontSize * 0.5 + 3; // heurística agradable
+
+  // Helper para escribir un párrafo con split y salto de página
+  const writeParagraph = (text, opts = {}) => {
+    const {
+      bold = false,
+      lineGap = 4,
+      before = 0,
+      after = 10,
+      fontSize = 11,
+    } = opts
+
+    if (!text) return
+
+    y = ensureSpace(doc, y, before + 20)
+    y += before
+
+    doc.setFont("helvetica", bold ? "bold" : "normal")
+    doc.setFontSize(fontSize)
+    const lines = doc.splitTextToSize(text, maxWidth)
+    doc.text(lines, marginLeft, y)
+    y += lines.length * 12 + lineGap + after
   }
 
-  // util: salto de página si no cabe una fila de alto 'h'
-  let y = M.t;
-  function ensure(h, headerDrawer) {
-    if (y + h > pageH - M.b) {
-      doc.addPage();
-      y = M.t;
-      headerDrawer?.();
+  // Helper título de sección
+  const writeSectionTitle = (title) => {
+    y = ensureSpace(doc, y, 28)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(13)
+    doc.text(title, marginLeft, y)
+    y += 18
+  }
+
+  // ---------------------------
+  // SECCIÓN I — RESULTADOS DEL TEST
+  // ---------------------------
+  const safeResults = results || {}
+  const totalRaw =
+    typeof safeResults.totalRaw === "number"
+      ? safeResults.totalRaw
+      : null
+  const totalPercent =
+    typeof safeResults.totalPercent === "number"
+      ? safeResults.totalPercent
+      : null
+  const scales = Array.isArray(safeResults.scales)
+    ? safeResults.scales
+    : []
+
+  // Intentar determinar totalMin / totalMax desde el propio results o desde una escala "TOTAL"
+  let totalMin =
+    typeof safeResults.totalMin === "number"
+      ? safeResults.totalMin
+      : null
+  let totalMax =
+    typeof safeResults.totalMax === "number"
+      ? safeResults.totalMax
+      : null
+
+  if ((totalMin == null || totalMax == null) && scales.length > 0) {
+    const totalScale = scales.find((s) => {
+      const code = (s.scaleCode || s.scale_code || "").toUpperCase()
+      const name = (s.scaleName || s.scale_name || "").toUpperCase()
+      return code === "TOTAL" || name.startsWith("TOTAL")
+    })
+    if (totalScale) {
+      if (typeof totalScale.min === "number" && totalMin == null)
+        totalMin = totalScale.min
+      if (typeof totalScale.max === "number" && totalMax == null)
+        totalMax = totalScale.max
     }
   }
 
-  // ======= encabezado del reporte =======
-  function drawReportHeader() {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(18);
-    doc.text(testName, M.l, y);
-    y += 6;
+  const hasAnyResult =
+    totalRaw != null ||
+    totalPercent != null ||
+    (scales && scales.length > 0)
+  if (hasAnyResult) {
+    writeSectionTitle("SECCIÓN I — Resultados del test")
 
-    doc.setDrawColor(0);
-    doc.setLineWidth(0.4);
-    doc.line(M.l, y + 2, pageW - M.r, y + 2);
-    y += 8;
-
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "bold");
-    doc.text("Paciente:", M.l, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(patientName || "-", M.l + 26, y);
-
-    doc.setFont("helvetica", "bold");
-    doc.text("ID Paciente:", pageW / 2, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(patientId || "-", pageW / 2 + 28, y);
-    y += 6;
-
-    doc.setFont("helvetica", "bold");
-    doc.text("Intento:", M.l, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(attemptId || "-", M.l + 26, y);
-
-    doc.setFont("helvetica", "bold");
-    doc.text("Fecha:", pageW / 2, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(dateText, pageW / 2 + 28, y);
-    y += 6;
-
-    doc.setFont("helvetica", "bold");
-    doc.text("Modo:", M.l, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(capitalize(scoringMode), M.l + 26, y);
-    y += 8;
-  }
-  function capitalize(s) {
-    const t = (s || "").toString();
-    return t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : t;
-  }
-
-  // ======= encabezado de tabla genérico =======
-  function drawHeaderRow(cols, heights = 9) {
-    // Fondo
-    doc.setFillColor(HEADER_BG);
-    doc.setDrawColor(GRID);
-    doc.setTextColor(...HEADER_TX);
-    doc.setLineWidth(0.2);
-    let x = M.l;
-    for (const c of cols) {
-      doc.rect(x, y, c.w, heights, "F"); // fill
-      x += c.w;
-    }
-    // Borde inferior
-    doc.setDrawColor(GRID);
-    doc.line(M.l, y + heights, M.l + cols.reduce((s, c) => s + c.w, 0), y + heights);
-
-    // Títulos
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    let tx = M.l + 2;
-    for (const c of cols) {
-      const lines = wrap(c.title, c.w - 4, 10);
-      const th = Math.min(heights - 2, lines.length * lineHeight(10));
-      doc.text(lines, tx, y + 6, { baseline: "middle" });
-      tx += c.w;
-    }
-    y += heights;
-  }
-
-  // ======= tabla GENERAL (Sí/No, Likert, multi + texto abierto) =======
-  function drawGeneral(model) {
-    const columns = model.columns || [];
-    const minOptW = 16;
-    const maxOptW = 22;
-
-    const codeW = 20;
-    const openTextCol = model.rows.some(r => r.openText && r.openText.trim()) ? 40 : 0;
-
-    const maxWidthAvail = pageW - M.l - M.r;
-    let optW = Math.max(minOptW, Math.min(maxOptW, Math.floor((maxWidthAvail - codeW - 60 - openTextCol) / Math.max(1, columns.length))));
-    // Ajustar pregunta con el resto
-    const usedByOpts = optW * columns.length + codeW + openTextCol;
-    const questionW = Math.max(60, maxWidthAvail - usedByOpts);
-
-    const cols = [
-      { key: "code", title: "Código", w: codeW },
-      { key: "text", title: "Pregunta", w: questionW },
-      ...columns.map(label => ({ key: `opt:${label}`, title: label, w: optW })),
-    ];
-    if (openTextCol) cols.push({ key: "open", title: "Respuesta (texto)", w: openTextCol });
-
-    const drawHeader = () => drawHeaderRow(cols);
-    drawHeader();
-
-    for (const row of model.rows) {
-      // Calcular alto por número de líneas de la pregunta (y/o openText)
-      const qLines = wrap(row.text || "", questionW - 4, 10).length;
-      const extra = openTextCol ? wrap(row.openText || "", openTextCol - 4, 10).length : 1;
-      const h = Math.max(9, Math.max(qLines, extra) * lineHeight(10) + 2);
-
-      ensure(h, drawHeader);
-      let x = M.l;
-
-      // Dibujar celdas + contenido
-      doc.setDrawColor(GRID);
-      doc.setLineWidth(0.2);
-      for (const c of cols) {
-        doc.rect(x, y, c.w, h, "S");
-        x += c.w;
+    // Resumen general
+    if (totalRaw != null) {
+      let resumen = `Puntaje total bruto: ${totalRaw.toFixed(2).replace(/\.00$/, "")}`
+      if (totalMin != null && totalMax != null) {
+        resumen += ` (rango posible: ${totalMin} – ${totalMax})`
       }
+      writeParagraph(resumen, { bold: false, after: 4 })
+    }
 
-      // Texto
-      let tx = M.l + 2;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      // code
-      doc.text(row.code || "", tx, y + 5);
-      tx += codeW;
+    if (totalPercent != null) {
+      const pctText = `Puntaje total en porcentaje: ${totalPercent.toFixed(1)} %`
+      writeParagraph(pctText, { bold: false, after: 10 })
+    }
 
-      // pregunta
-      doc.text(wrap(row.text || "", questionW - 4, 10), tx, y + 5);
-      tx += questionW;
+    // Tabla de escalas
+    if (scales && scales.length > 0) {
+      y = ensureSpace(doc, y, 32)
+      doc.setFont("helvetica", "bold")
+      doc.setFontSize(11)
 
-      // opciones
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(13);
-      for (const label of columns) {
-        const mark = row.marks?.[label] ? "X" : "";
-        const cx = tx + optW / 2;
-        const cy = y + h / 2 + 0.5;
-        if (mark) doc.text(mark, cx, cy, { align: "center", baseline: "middle" });
-        tx += optW;
-      }
+      const colCode = marginLeft
+      const colName = marginLeft + 120
+      const colRaw = marginLeft + maxWidth - 150
+      const colPct = marginLeft + maxWidth - 90
+      const colRange = marginLeft + maxWidth - 10
 
-      // open text
-      if (openTextCol) {
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(10);
-        doc.text(wrap(row.openText || "", openTextCol - 4, 10), tx, y + 5);
-      }
+      // Encabezados
+      doc.text("Código", colCode, y)
+      doc.text("Escala", colName, y)
+      doc.text("Bruto", colRaw, y)
+      doc.text("%", colPct, y)
+      doc.text("Rango", colRange, y, { align: "right" })
+      y += 16
 
-      y += h;
+      doc.setFont("helvetica", "normal")
+      
+
+      scales.forEach((s) => {
+        y = ensureSpace(doc, y, 18)
+
+        const code =
+          (s.scaleCode || s.scale_code || "").trim() || "-"
+        const name =
+          (s.scaleName || s.scale_name || "").trim() || "-"
+        const raw =
+          typeof s.raw === "number"
+            ? s.raw.toFixed(2).replace(/\.00$/, "")
+            : "-"
+        const pct =
+          typeof s.percent === "number"
+            ? `${s.percent.toFixed(1)} %`
+            : "-"
+        const min =
+          typeof s.min === "number"
+            ? s.min.toFixed(0)
+            : null
+        const max =
+          typeof s.max === "number"
+            ? s.max.toFixed(0)
+            : null
+        const range =
+          min != null && max != null ? `${min}–${max}` : "-"
+
+        doc.setFontSize(9)
+        doc.text(code, colCode, y)
+        doc.setFontSize(10)
+        doc.text(name, colName, y, {
+          maxWidth: colRaw - colName - 10,
+        })
+        doc.text(String(raw), colRaw, y, { align: "left" })
+        doc.text(pct, colPct, y, { align: "left" })
+        doc.text(range, colRange, y, { align: "right" })
+
+        y += 14
+      })
     }
   }
 
-  // ======= tabla TRIADS (3 opciones por fila, estilo CDI) =======
-  function drawTriads(model) {
-    const codeW = 20;
-    const answers = 3;
+  // ---------------------------
+  // SECCIÓN II — RESPUESTAS DEL TEST (OPCIONAL)
+  // ---------------------------
+  const shouldIncludeAnswers = !!includeAnswers
 
-    const maxWidthAvail = pageW - M.l - M.r;
-    // Damos 18mm a cada columna de respuesta (y ajustamos si no cabe)
-    let optW = 18;
-    let optionsBlock = optW * answers;
-    if (codeW + optionsBlock + 60 > maxWidthAvail) {
-      optW = Math.max(14, Math.floor((maxWidthAvail - codeW - 60) / answers));
-      optionsBlock = optW * answers;
-    }
-    const questionW = maxWidthAvail - codeW - optionsBlock;
+  if (shouldIncludeAnswers) {
+    const answersArray = Array.isArray(answers) ? answers : []
 
-    const cols = [
-      { key: "code", title: "Código", w: codeW },
-      { key: "opts", title: "Opciones (elige una)", w: questionW },
-      { key: "a", title: "", w: optW },
-      { key: "b", title: "", w: optW },
-      { key: "c", title: "", w: optW },
-    ];
+    // También soportamos modelo especial (por ejemplo SACKS)
+    const isSacksModel = pdfModel && pdfModel.kind === "sacks"
 
-    const drawHeader = () => drawHeaderRow(cols);
-    drawHeader();
+    // Separador visual entre secciones
+    y = ensureSpace(doc, y, 40)
+    y += 10
+    doc.setDrawColor(200)
+    doc.line(marginLeft, y, marginLeft + maxWidth, y)
+    y += 20
 
-    for (const row of model.rows) {
-      // 3 líneas de opciones (forzamos cada una en renglones separados)
-      const lines = [
-        ...wrap(row.optionTexts?.[0] || "", questionW - 4, 10),
-        ...wrap(row.optionTexts?.[1] || "", questionW - 4, 10),
-        ...wrap(row.optionTexts?.[2] || "", questionW - 4, 10),
-      ];
-      const h = Math.max(12, Math.max(lines.length, 3) * lineHeight(10) + 2);
+    writeSectionTitle("SECCIÓN II — Respuestas del test")
 
-      ensure(h, drawHeader);
+    // --- Caso especial: SACKS con pdfModel.sections ---
+    if (
+      isSacksModel &&
+      Array.isArray(pdfModel.sections) &&
+      pdfModel.sections.length > 0
+    ) {
+      pdfModel.sections.forEach((section, idxSection) => {
+        const secTitleParts = []
+        if (section.code) secTitleParts.push(`[${section.code}]`)
+        if (section.name) secTitleParts.push(section.name)
+        const secTitle =
+          secTitleParts.join(" ") || `Sección ${idxSection + 1}`
 
-      // grid
-      doc.setDrawColor(GRID);
-      doc.setLineWidth(0.2);
-      let x = M.l;
-      for (const c of cols) {
-        doc.rect(x, y, c.w, h, "S");
-        x += c.w;
+        writeParagraph(secTitle, {
+          bold: true,
+          before: idxSection === 0 ? 4 : 10,
+          after: 4,
+        })
+
+        const rows = Array.isArray(section.rows)
+          ? section.rows
+          : []
+        rows.forEach((row, idxRow) => {
+          const qParts = []
+          if (row.code) qParts.push(row.code)
+          if (row.text) qParts.push(row.text)
+          const qLabel =
+            qParts.join(" — ") || `Ítem ${idxRow + 1}`
+
+          writeParagraph(qLabel, {
+            bold: true,
+            before: 2,
+            after: 2,
+            fontSize: 10,
+          })
+
+          const answerText =
+            (row.answerText || "").trim() || "(sin respuesta)"
+          writeParagraph(`Respuesta: ${answerText}`, {
+            bold: false,
+            before: 0,
+            after: 6,
+            fontSize: 10,
+          })
+        })
+      })
+    } else {
+      // --- Caso genérico: cualquier test auto/clinician con answers crudas ---
+      if (answersArray.length === 0) {
+        writeParagraph("No se encontraron respuestas para este intento.", {
+          bold: false,
+          after: 10,
+        })
+      } else {
+        answersArray.forEach((a, idx) => {
+          const indexLabel = `${idx + 1}.`
+
+          const qCode =
+            (a.questionCode ||
+              a.code ||
+              a.question_code ||
+              "").trim()
+          const qText =
+            (a.questionText ||
+              a.question ||
+              a.text ||
+              "").trim()
+
+          const questionParts = [indexLabel]
+          if (qCode) questionParts.push(`[${qCode}]`)
+          if (qText) questionParts.push(qText)
+
+          const questionLabel =
+            questionParts.join(" ") ||
+            `${indexLabel} (ítem sin texto)`
+
+          // Determinar texto de respuesta
+          let ansText = ""
+          if (a.answerText != null && String(a.answerText).trim()) {
+            ansText = String(a.answerText).trim()
+          } else if (
+            typeof a.answerValue === "number" ||
+            (typeof a.answerValue === "string" &&
+              a.answerValue.trim())
+          ) {
+            ansText = String(a.answerValue).trim()
+          } else if (
+            Array.isArray(a.answerValues) &&
+            a.answerValues.length > 0
+          ) {
+            ansText = a.answerValues
+              .map((v) => String(v))
+              .join(", ")
+          } else if (
+            Array.isArray(a.values) &&
+            a.values.length > 0
+          ) {
+            ansText = a.values.map((v) => String(v)).join(", ")
+          } else {
+            ansText = "(sin respuesta)"
+          }
+
+          writeParagraph(questionLabel, {
+            bold: true,
+            before: idx === 0 ? 4 : 6,
+            after: 2,
+            fontSize: 10,
+          })
+
+          writeParagraph(`Respuesta: ${ansText}`, {
+            bold: false,
+            before: 0,
+            after: 6,
+            fontSize: 10,
+          })
+        })
       }
-
-      // columna de código
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(row.code || "", M.l + 2, y + 5);
-
-      // columna de opciones (bloque de 3 líneas)
-      const qx = M.l + codeW + 2;
-      let qy = y + 5;
-      doc.text(wrap(row.optionTexts?.[0] || "", questionW - 4, 10), qx, qy);
-      qy += lineHeight(10) * Math.max(1, wrap(row.optionTexts?.[0] || "", questionW - 4, 10).length);
-      doc.text(wrap(row.optionTexts?.[1] || "", questionW - 4, 10), qx, qy);
-      qy += lineHeight(10) * Math.max(1, wrap(row.optionTexts?.[1] || "", questionW - 4, 10).length);
-      doc.text(wrap(row.optionTexts?.[2] || "", questionW - 4, 10), qx, qy);
-
-      // “X” centrada en la celda seleccionada (ligeramente más pequeña que en general)
-      const markSize = 11;
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(markSize);
-      const startAnsX = M.l + codeW + questionW;
-      for (let i = 0; i < 3; i++) {
-        const sel = !!row.marks?.[i];
-        if (sel) {
-          const cx = startAnsX + i * optW + optW / 2;
-          const cy = y + h / 2 + 0.5;
-          doc.text("X", cx, cy, { align: "center", baseline: "middle" });
-        }
-      }
-
-      y += h;
     }
   }
 
-  // ======= tabla SACKS (toda la batería, sin “_____” en el ítem) =======
-  function drawSacks(model) {
-    const codeW = 20;
-    const maxWidthAvail = pageW - M.l - M.r;
+  // ---------------------------
+  // FOOTER (igual que en generateConsentPdf)
+  // ---------------------------
+  const pageCount = doc.getNumberOfPages()
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i)
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(9)
+    doc.setTextColor(120)
 
-    for (const sec of model.sections || []) {
-      // Título de sección
-      ensure(10);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(13);
-      doc.text(`${sec.code ? sec.code + " — " : ""}${sec.name || ""}`, M.l, y + 6);
-      y += 10;
+    const posY = doc.internal.pageSize.getHeight() - 18
+    const pageWidth = doc.internal.pageSize.getWidth()
 
-      // Calcular anchos: Item + Respuesta
-      const answerW = 60; // respuesta amplia
-      const itemW = Math.max(60, maxWidthAvail - codeW - answerW);
+    doc.text(
+      `Generado por Alfa-Doc · ${new Date().toLocaleDateString()}`,
+      40,
+      posY
+    )
 
-      const cols = [
-        { key: "code", title: "Código", w: codeW },
-        { key: "item", title: "Ítem", w: itemW },
-        { key: "ans", title: "Respuesta", w: answerW },
-      ];
-      const drawHeader = () => drawHeaderRow(cols);
-      drawHeader();
-
-      for (const r of sec.rows || []) {
-        const cleanText = (r.text || "").replace(/_+/g, " "); // quitar guiones bajos
-        const itemLines = wrap(cleanText, itemW - 4, 10);
-        const ansLines = wrap(r.answerText || "", answerW - 4, 10);
-        const h = Math.max(9, Math.max(itemLines.length, ansLines.length) * lineHeight(10) + 2);
-
-        ensure(h, drawHeader);
-
-        // grid
-        doc.setDrawColor(GRID);
-        doc.setLineWidth(0.2);
-        let x = M.l;
-        for (const c of cols) {
-          doc.rect(x, y, c.w, h, "S");
-          x += c.w;
-        }
-
-        // code
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(10);
-        doc.text(r.code || "", M.l + 2, y + 5);
-
-        // item
-        doc.text(itemLines, M.l + codeW + 2, y + 5);
-
-        // respuesta
-        doc.text(ansLines, M.l + codeW + itemW + 2, y + 5);
-
-        y += h;
-      }
-    }
+    doc.text(
+      `Página ${i} de ${pageCount}`,
+      pageWidth - 40,
+      posY,
+      { align: "right" }
+    )
   }
-
-  // ========= RENDER =========
-  drawReportHeader();
-
-  if (!pdfModel || !pdfModel.kind) {
-    // Fallback mínimo si algo vino mal
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(12);
-    doc.text("No hay datos para mostrar.", M.l, y + 10);
-  } else if (pdfModel.kind === "general") {
-    drawGeneral(pdfModel);
-  } else if (pdfModel.kind === "triads") {
-    drawTriads(pdfModel);
-  } else if (pdfModel.kind === "sacks") {
-    drawSacks(pdfModel);
-  }
-
-  // Descargar
-  const safeName = `${testName}`.replace(/[^\w\-]+/g, "_");
-  doc.save(`${safeName}.pdf`);
+  return doc.output("blob")
 }

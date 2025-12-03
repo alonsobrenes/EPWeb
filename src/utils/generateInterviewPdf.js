@@ -1,6 +1,8 @@
 import jsPDF from "jspdf"
 
-export function generateInterviewPdf({ patient, interview, transcript, draft }) {
+export function generateInterviewPdf({ patient, interview, transcript, draft, clinicianDiagnosis }) {
+
+  
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   let y = 40
   doc.setFont("helvetica", "bold")
@@ -20,6 +22,12 @@ export function generateInterviewPdf({ patient, interview, transcript, draft }) 
   doc.setFont("helvetica", "normal")
   const dw = doc.splitTextToSize(draft || "(sin borrador)", 515)
   doc.text(dw, 40, y)
+
+   y += 12
+  doc.setFont("helvetica", "bold"); doc.text("Notas del Profesional:", 40, y); y += 16
+  doc.setFont("helvetica", "normal")
+  const cd = doc.splitTextToSize(clinicianDiagnosis || "(sin notas)", 515)
+  doc.text(cd, 40, y)
 
   return doc.output("blob")
 }

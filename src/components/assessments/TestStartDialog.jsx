@@ -185,12 +185,10 @@ function PatientSearch({ onSelected }) {
 
 export default function TestStartDialog({ open, onOpenChange, test, onStarted }) {
   if (!open) return null
-
   const name = test?.name || 'Test'
   const code = test?.code || ''
   const description = test?.description || 'Sin descripción.'
   const instructions = test?.instructions || null
-  const pdfUrl = useMemo(() => test?.pdfUrl || test?.pdf_url || null, [test])
 
   const ageGroup = test?.ageGroupName || test?.age_group_name || '—'
   const questionCount = Number.isFinite(test?.questionCount) ? test.questionCount : (test?.question_count ?? null)
@@ -265,65 +263,135 @@ export default function TestStartDialog({ open, onOpenChange, test, onStarted })
           <QuotaStrip show={['tests.auto.monthly', 'sacks.monthly']} showHints />
           {paywall && <PaywallCTA onAfterClick={() => onOpenChange?.(false)} />}
           {/* Grid: PDF a la izquierda, info + asignación a la derecha */}
-          <Box
-            display="grid"
-            gap={{ base: '16px', md: '20px' }}
-            gridTemplateColumns={{ base: '1fr', lg: '1fr 380px' }}
-            alignItems="start"
+          {/* Grid: info del test a la izquierda, asignación a la derecha */}
+<Box
+  display="grid"
+  gap={{ base: "16px", md: "20px" }}
+  gridTemplateColumns={{ base: "1fr", lg: "1fr 380px" }}
+  alignItems="start"
+>
+  {/* Columna izquierda: info del test */}
+  <Box
+    borderWidth="1px"
+    rounded="lg"
+    p="4"
+    bg="bg.subtle"
+  >
+    <VStack align="stretch" gap="4">
+      {/* Badges arriba */}
+      <HStack gap="2" wrap="wrap">
+        <Badge variant="subtle">
+          Grupo etario: {ageGroup}
+        </Badge>
+        {questionCount != null && (
+          <Badge variant="subtle">
+            {questionCount} preguntas
+          </Badge>
+        )}
+        {test?.code && (
+          <Badge variant="outline" colorPalette="gray">
+            Código: {test.code}
+          </Badge>
+        )}
+      </HStack>
+
+      {/* Descripción */}
+      <Box>
+        <Text
+          fontSize="xs"
+          textTransform="uppercase"
+          letterSpacing="0.08em"
+          color="fg.muted"
+          mb="1"
+        >
+          Descripción
+        </Text>
+        <Text color="fg.default">
+          {description}
+        </Text>
+      </Box>
+
+      {/* Instrucciones */}
+      <Box>
+        <Text
+          fontSize="xs"
+          textTransform="uppercase"
+          letterSpacing="0.08em"
+          color="fg.muted"
+          mb="1"
+        >
+          Instrucciones
+        </Text>
+        <Text
+          color="fg.default"
+          whiteSpace="pre-line"
+        >
+          {instructions || "—"}
+        </Text>
+      </Box>
+    </VStack>
+  </Box>
+
+  {/* Columna derecha: asignación (con scroll si hace falta) */}
+  <VStack
+    align="stretch"
+    gap="4"
+    maxH={heights}
+    overflowY="auto"
+    pr="1"
+  >
+    <Box
+      borderWidth="1px"
+      rounded="lg"
+      p="4"
+      bg="white"
+      shadow="xs"
+    >
+      <Heading size="sm" mb="1">
+        Asignar evaluación
+      </Heading>
+      <Text fontSize="sm" color="fg.muted" mb="3">
+        Selecciona a la persona a evaluar y luego inicia el test.
+      </Text>
+
+      {!patientId ? (
+        <PatientSearch
+          onSelected={(p) => {
+            const first = p.firstName ?? p.first_name ?? "";
+            const last1 = p.lastName1 ?? p.last_name1 ?? "";
+            const last2 = p.lastName2 ?? p.last_name2 ?? "";
+            const display =
+              [first, last1, last2].filter(Boolean).join(" ") ||
+              "Paciente";
+            setPatientId(p.id);
+            setPatientName(display);
+            toaster.success({
+              title: "Paciente seleccionado",
+              description: display,
+            });
+          }}
+        />
+      ) : (
+        <HStack justify="space-between" mt="2">
+          <Badge colorPalette="green">
+            Seleccionado: {patientName}
+          </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setPatientId("");
+              setPatientName("");
+            }}
           >
-            {/* Columna izquierda */}
-            <VStack align="stretch" gap="3">
-              <HStack gap="2" wrap="wrap">
-                <Badge variant="subtle">Grupo etario: {ageGroup}</Badge>
-                {questionCount != null && (
-                  <Badge variant="subtle">{questionCount} preguntas</Badge>
-                )}
-              </HStack>
-              <PdfPreview url={pdfUrl} />
-            </VStack>
+            Cambiar
+          </Button>
+        </HStack>
+      )}
+    </Box>
+  </VStack>
+</Box>
 
-            {/* Columna derecha (con scroll, incluye asignación simple) */}
-            <VStack align="stretch" gap="4" maxH={heights} overflowY="auto" pr="1">
-              <Box>
-                <Heading size="sm" mb="1">Descripción</Heading>
-                <Text color="fg.muted">{description}</Text>
-              </Box>
-
-              <Separator />
-
-              <Box>
-                <Heading size="sm" mb="1">Instrucciones</Heading>
-                <Text color="fg.muted">{instructions || '—'}</Text>
-              </Box>
-
-              <Separator />
-
-              <Box borderWidth="1px" rounded="lg" p="4" bg="white">
-                <Heading size="sm" mb="3">Asignar evaluación</Heading>
-
-                {!patientId ? (
-                  <PatientSearch
-                    onSelected={(p) => {
-                      const first = p.firstName ?? p.first_name ?? ''
-                      const last1 = p.lastName1 ?? p.last_name1 ?? ''
-                      const last2 = p.lastName2 ?? p.last_name2 ?? ''
-                      const display = [first, last1, last2].filter(Boolean).join(' ') || 'Paciente'
-                      setPatientId(p.id)
-                      setPatientName(display)
-                      toaster.success({ title: 'Paciente seleccionado', description: display })
-                    }}
-                  />
-                ) : (
-                  <HStack justify="space-between">
-                    <Badge colorPalette="green">Seleccionado: {patientName}</Badge>
-                    <Button size="sm" variant="outline" onClick={() => { setPatientId(''); setPatientName('') }}>
-                      Cambiar
-                    </Button>
-                  </HStack>
-                )}
-              </Box>
-            </VStack>
-          </Box>
 
           {/* Footer */}
           <HStack justify="flex-end" mt="6">

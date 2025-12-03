@@ -1,10 +1,11 @@
 // src/components/billing/BillingProfileForm.jsx
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import { Box, Button, Field, HStack, Input, Text, VStack } from "@chakra-ui/react"
 import { toaster } from "../ui/toaster"
-import BillingApi from "../../api/BillingApi"
+import BillingApi from "../../api/billingApi"
 import { getCurrentOrgSummary } from "../../api/orgsApi"
 import { countriesIso2, flagEmojiFromISO2 } from "../../data/countriesIso2"
+import client from "../../api/client"
 
 const emptyAddress = { line1: "", line2: "", city: "", stateRegion: "", postalCode: "", countryIso2: "" }
 
@@ -12,6 +13,10 @@ export default function BillingProfileForm() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [orgSummary, setOrgSummary] = useState(null) // { planCode, status, seats, kind }
+
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState(null)
+  const logoInputRef = useRef(null)
 
   // Datos persistidos en backend (se mantiene el contrato existente)
   const [data, setData] = useState({
@@ -23,6 +28,7 @@ export default function BillingProfileForm() {
     website: "",
     billingAddress: { ...emptyAddress },
     shippingAddress: null,
+    logoUrl: null,
   })
 
   // ------------------------------------------------------------------
@@ -63,6 +69,7 @@ export default function BillingProfileForm() {
         contactEmail: "Email de facturación *",
         contactPhone: "Teléfono de facturación",
         billingTitle: "Dirección de facturación *",
+        logoTitle: "Logo (opcional)",
       }
     }
     return {
@@ -74,6 +81,7 @@ export default function BillingProfileForm() {
       contactEmail: "Email de contacto *",
       contactPhone: "Teléfono de contacto",
       billingTitle: "Dirección de facturación *",
+      logoTitle: "Logo de la organización",
     }
   }, [isSolo])
 
@@ -96,6 +104,7 @@ export default function BillingProfileForm() {
             website: res.website ?? "",
             billingAddress: { ...emptyAddress, ...(res.billingAddress ?? {}) },
             shippingAddress: res.shippingAddress ?? null,
+            logoUrl: res.logoUrl ?? null,
           })
         }
       } catch (e) {
@@ -248,31 +257,29 @@ export default function BillingProfileForm() {
                 />
               </Field.Root>
               <Field.Root>
-                  <Field.Label>País *</Field.Label>
-                  <select
-                    value={(data.billingAddress.countryIso2 || "").toUpperCase()}
-                    onChange={(e) => setAddr("billingAddress", "countryIso2", e.target.value.toUpperCase())}
-                    aria-label="País (ISO-2)"
-                    // ayuda a que el browser no meta "Costa Rica" en lugar de "CR"
-                    autoComplete="country"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 6,
-                      border: '1px solid var(--chakra-colors-border)',
-                      width: '100%',
-                      background: 'var(--chakra-colors-bg)',
-                      color: 'var(--chakra-colors-fg)'
-                    }}
-                  >
-                    <option value="" disabled>Selecciona país…</option>
-                    {countriesIso2.map(c => (
-                      <option key={c.code} value={c.code}>
-                        {`${flagEmojiFromISO2(c.code)} ${c.name}`}
-                      </option>
-                    ))}
-                  </select>
-                </Field.Root>
-
+                <Field.Label>País *</Field.Label>
+                <select
+                  value={(data.billingAddress.countryIso2 || "").toUpperCase()}
+                  onChange={(e) => setAddr("billingAddress", "countryIso2", e.target.value.toUpperCase())}
+                  aria-label="País (ISO-2)"
+                  autoComplete="country"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--chakra-colors-border)',
+                    width: '100%',
+                    background: 'var(--chakra-colors-bg)',
+                    color: 'var(--chakra-colors-fg)'
+                  }}
+                >
+                  <option value="" disabled>Selecciona país…</option>
+                  {countriesIso2.map(c => (
+                    <option key={c.code} value={c.code}>
+                      {`${flagEmojiFromISO2(c.code)} ${c.name}`}
+                    </option>
+                  ))}
+                </select>
+              </Field.Root>
             </HStack>
           </VStack>
         </Box>

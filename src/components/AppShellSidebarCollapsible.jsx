@@ -159,14 +159,9 @@ function deriveInitials(nameOrEmail) {
 }
 function deriveUid() {
   const p = decodeJwtPayload();
-  const email = deriveEmailFromPayload(p);
   const id =
-    p["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"] ||
-    p.sub ||
-    p.nameid ||
-    p.uid ||
-    null;
-  return (email || id || "").toString().toLowerCase();
+    p["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"];
+  return id.toString().toLowerCase();
 }
 function absUrl(u) {
   if (!u) return u;
@@ -246,9 +241,12 @@ function deriveDisplay(currentUser) {
 
   const role = currentUser?.role || deriveRoleFromPayload(payload) || ""
 
-  const avatarUrl = absUrl(
+  const rawAvatar =
     cachedAvatar || cached?.avatarUrl || currentUser?.avatarUrl || ""
-  )
+
+  const avatarUrl = rawAvatar && rawAvatar.startsWith("data:")
+    ? rawAvatar
+    : absUrl(rawAvatar)
 
   const displayName = name || email || "Usuario"
 
@@ -260,15 +258,58 @@ function deriveDisplay(currentUser) {
     initials: deriveInitials(displayName),
   }
 }
+
+
+function SecureAvatar({ avatarUrl, initials, size = "sm", alt = "Avatar" }) {
+  const [src, setSrc] = useState(avatarUrl || "")
+
+  useEffect(() => {
+    const uid = deriveUid()
+    if (!uid) {
+      setSrc(avatarUrl || "")
+      return
+    }
+
+    const cacheKey = `ep:avatarUrl:${uid}`
+
+    const loadFromCache = () => {
+      try {
+        const cached =
+          localStorage.getItem(cacheKey) ||
+          localStorage.getItem("ep:avatarUrl") || ""
+        if (cached) {
+          setSrc(cached)
+        } else {
+          setSrc(avatarUrl || "")
+        }
+      } catch {
+        setSrc(avatarUrl || "")
+      }
+    }
+
+    // Cargar al montar / cuando cambia avatarUrl
+    loadFromCache()
+
+    // Escuchar cambios desde ProfilePage
+    window.addEventListener("ep:profile-updated", loadFromCache)
+    return () => window.removeEventListener("ep:profile-updated", loadFromCache)
+  }, [avatarUrl])
+
+  return (
+    <Avatar.Root size={size}>
+      {src ? <Avatar.Image src={src} alt={alt} /> : null}
+      <Avatar.Fallback>{initials}</Avatar.Fallback>
+    </Avatar.Root>
+  )
+}
+
+
 function UserCard({ currentUser, onLogout, onNavigateProfile }) {
   const { name, email, initials, role, avatarUrl } = deriveDisplay(currentUser)
   return (
     <HStack p="3" borderWidth="1px" rounded="lg" justify="space-between" align="center" bg="white">
       <HStack gap="3" minW={0}>
-        <Avatar.Root size="sm">
-          {avatarUrl ? <Avatar.Image src={avatarUrl} alt="Avatar" /> : null}
-          <Avatar.Fallback>{initials}</Avatar.Fallback>
-        </Avatar.Root>
+        <SecureAvatar avatarUrl={avatarUrl} initials={initials} size="sm"/>
         <Box minW={0} flex="1" overflow="hidden">
           <HStack gap="2">
             <Text fontWeight="semibold" maxW="160px" whiteSpace="nowrap" overflow="hidden" textOverflow="ellipsis">{name}</Text>
@@ -306,7 +347,7 @@ function HeaderUserMenu({
   onLogout,
   onNavigateProfile,
   onNavigateSettings,
-  onNavigateHelp,
+  onNavigateHelp
 }) {
   const { name, email, initials, role, avatarUrl } = deriveDisplay(currentUser)
 
@@ -346,10 +387,7 @@ function HeaderUserMenu({
         ) : null}
       </VStack>
 
-      <Avatar.Root size="sm">
-        {avatarUrl ? <Avatar.Image src={avatarUrl} alt="Avatar" /> : null}
-        <Avatar.Fallback>{initials}</Avatar.Fallback>
-      </Avatar.Root>
+      <SecureAvatar avatarUrl={avatarUrl} initials={initials} size="sm" />
     </HStack>
   )
 
@@ -378,10 +416,7 @@ function HeaderUserMenu({
          >
            <Box p="3" borderBottomWidth="1px">
           <HStack gap="3">
-            <Avatar.Root size="md">
-              {avatarUrl ? <Avatar.Image src={avatarUrl} alt="Avatar" /> : null}
-              <Avatar.Fallback>{initials}</Avatar.Fallback>
-            </Avatar.Root>
+            <SecureAvatar avatarUrl={avatarUrl} initials={initials} size="xl" />
             <VStack align="start" gap="0" minW={0}>
               <Text fontWeight="semibold" noOfLines={1} maxW="280px">
                 {name}
@@ -402,19 +437,7 @@ function HeaderUserMenu({
           </HStack>
         </Menu.Item>
 
-        {/* <Menu.Item onClick={onNavigateSettings}>
-          <HStack gap="2">
-            <Icon as={LuSettings} />
-            <Text>Configuración</Text>
-          </HStack>
-        </Menu.Item> */}
-
-        {/* <Menu.Item onClick={onNavigateHelp}>
-          <HStack gap="2">
-            <Icon as={LuLogOut} />
-            <Text>Ayuda</Text>
-          </HStack>
-        </Menu.Item> */}
+        
 
         <Separator my="1" />
 
@@ -494,6 +517,7 @@ export default function AppShellSidebarCollapsible() {
   const isDesktop = useBreakpointValue({ base: false, lg: true })
   const [, forceUpdate] = useReducer(x => x + 1, 0)
   const orgKind = useOrgKind()
+  const [avatarUrl, setAvatarUrl] = useState("")
 
   const handleSearch = ({ q, types }) => {
     // Construye SIEMPRE un QS nuevo (no reutilices el de window.location)
@@ -532,6 +556,8 @@ export default function AppShellSidebarCollapsible() {
         avatarUrl: absUrl(avatarFromCache),
       });
     }
+
+    setAvatarUrl(avatarFromCache)
     // 2) Si falta email o avatar, consulta /users/me una sola vez
     const needFetch = !(cached?.email) || !(avatarFromCache);
     if (needFetch) {
@@ -571,11 +597,11 @@ export default function AppShellSidebarCollapsible() {
     window.addEventListener("ep:profile-updated", onUpdated);
     return () => window.removeEventListener("ep:profile-updated", onUpdated);
   }, []);
-  useEffect(() => {
-    const h = () => forceUpdate()
-    window.addEventListener("ep:profile-updated", h)
-    return () => window.removeEventListener("ep:profile-updated", h)
-  }, [])
+  // useEffect(() => {
+  //   const h = () => forceUpdate()
+  //   window.addEventListener("ep:profile-updated", h)
+  //   return () => window.removeEventListener("ep:profile-updated", h)
+  // }, [])
   const { logout, user: authUser } = useAuth()
   const user = authUser ?? getCurrentUser()
   const navigate = useNavigate()
@@ -624,7 +650,7 @@ export default function AppShellSidebarCollapsible() {
    <HeaderUserMenu
      currentUser={user}
      onLogout={handleLogout}
-     onNavigateProfile={goProfile}
+     onNavigateProfile={goProfile}     
    />
  </HStack>
         </HStack>
