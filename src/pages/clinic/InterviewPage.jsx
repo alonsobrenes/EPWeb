@@ -755,11 +755,11 @@ export default function InterviewPage() {
         </HStack>
       </Card.Root>
 
-      <HStack justify="end">
+      {/* <HStack justify="end">
         <Button onClick={exportPdf} variant="outline" disabled={anyBusy}>
           Exportar PDF
         </Button>
-      </HStack>
+      </HStack> */}
     </VStack>
   )
 }

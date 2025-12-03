@@ -1,15 +1,6 @@
 // src/api/profileApi.js
 import client from './client'
-
-function tryGetOrgId() {
-  try {
-    const fromWindow = (typeof window !== 'undefined' && window.EP_ORG_ID) ? String(window.EP_ORG_ID) : null
-    const fromLS = (typeof window !== 'undefined') ? (localStorage.getItem('orgId') || localStorage.getItem('ORG_ID')) : null
-    const fromSS = (typeof window !== 'undefined') ? (sessionStorage.getItem('orgId') || sessionStorage.getItem('ORG_ID')) : null
-    const val = fromWindow || fromLS || fromSS
-    return (val && /^[0-9a-fA-F-]{36}$/.test(val)) ? val : null
-  } catch { return null }
-}
+import {tryGetOrgId} from '../utils/identity'
 
 function withOrgHeader(extra = {}) {
   const orgId = tryGetOrgId()
@@ -73,7 +64,13 @@ export const ProfileApi = {
   },
   async unassignLabel({ labelId, targetType, targetId }) {
     await client.post('/labels/unassign', { labelId, targetType, targetId }, { headers: withOrgHeader() })
-  }
+  },
+  async getAvatar(avatarUrl) {
+    const { data } = await client.get(avatarUrl, { headers: withOrgHeader() }, {
+          responseType: "blob",
+        })
+    return data // { items: [...] }
+  },
 }
 
 export default ProfileApi

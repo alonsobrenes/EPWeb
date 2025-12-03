@@ -1,25 +1,15 @@
 // src/utils/generateConsentPdf.js
-import jsPDF from "jspdf"
-
+import { createBaseReport } from "../reports/reportTemplate"
+import {tryGetOrgId} from '../utils/identity'
 /**
  * Genera un PDF del consentimiento informado para atención psicológica.
  *
  * @param {object} args
- * @param {object} args.patient - { fullName?, name?, id?, identificationNumber? }
+ * @param {object} args.patient - { fullName?, name?, identificationNumber? }
  * @param {object} args.consent - PatientConsentDto (firmado)
- *
- * Campos esperados en consent:
- *  - signedName
- *  - signedIdNumber
- *  - signedByRelationship
- *  - countryCode
- *  - language
- *  - rawConsentText
- *  - consentVersion
- *  - localAddendumCountry
- *  - localAddendumVersion
- *  - signedAtUtc
- *  - signatureUri (data URL PNG)
+ * @param {string} args.signatureImageBase64 - data:image/png;base64,... de la firma
+ * @param {string} [args.orgLogoBase64] - data:image/png;base64,... del logo (opcional)
+ * @param {string} [args.orgName] - nombre de la organización (opcional)
  */
 function normalizeConsentText(raw) {
   if (!raw) return ""
@@ -29,7 +19,7 @@ function normalizeConsentText(raw) {
   // Normalización básica de saltos de línea y listas
   text = text.replace(/<\s*br\s*\/?>/gi, "\n")
   text = text.replace(/<\/p>/gi, "\n\n")
-  text = text.replace(/<p[^>]*>/gi, "") // abrimos <p> sin nada
+  text = text.replace(/<p[^>]*>/gi, "") // quitamos <p>
 
   // Encabezados: los separamos con doble salto de línea
   text = text.replace(/<h[1-6][^>]*>/gi, "\n\n")
@@ -51,13 +41,16 @@ function normalizeConsentText(raw) {
   return text.trim()
 }
 
-export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
-  const doc = new jsPDF({ unit: "pt", format: "a4" })
-  const marginLeft = 40
-  const marginRight = 40
-  const maxWidth = 595 - marginLeft - marginRight // ancho útil A4
-  const pageHeight = doc.internal.pageSize.getHeight()
-  let y = 40
+export function generateConsentPdf({
+  patient,
+  consent,
+  signatureImageBase64,
+  orgName,
+}) {
+  const orgId = tryGetOrgId()
+  const orgLogoBase64 = orgId
+    ? localStorage.getItem(`ep:logo:${orgId}`)
+    : null
 
   const patientName =
     (patient?.fullName || patient?.name || "").trim() || "(sin nombre)"
@@ -76,11 +69,68 @@ export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
     : new Date()
   const signedAtText = signedAt.toLocaleString()
 
+  // Texto para País / versión
+  let versionText = ""
+  const versionTextParts = []
+  if (countryCode) versionTextParts.push(countryCode)
+  if (version) versionTextParts.push(`versión ${version}`)
+  if (localAddendumCountry && localAddendumVersion) {
+    versionTextParts.push(
+      `addendum ${localAddendumCountry} (${localAddendumVersion})`
+    )
+  }
+  if (versionTextParts.length > 0) {
+    versionText = versionTextParts.join(" · ")
+  }
+
+  // ---------------------------
+  // PLANTILLA BASE (LOGO + TÍTULO + SUBTÍTULO + ENCABEZADO)
+  // ---------------------------
+  const {
+    doc,
+    marginLeft,
+    maxWidth,
+    pageHeight,
+    y: startY,
+  } = createBaseReport({
+    title: "Consentimiento informado para atención psicológica",
+    subtitle:
+      "Uso de herramientas digitales y expediente clínico electrónico (Alfa-Doc)",
+    orgName,
+    orgLogoBase64,
+    infoRows: [
+      {
+        label: "Nombre de la persona usuaria:",
+        value: patientName,
+      },
+      {
+        label: "Número de identificación:",
+        value: patientIdNumber,
+      },
+      {
+        label: "Fecha de firma:",
+        value: signedAtText,
+      },
+      {
+        label: "Firma de:",
+        value: `${signedName} (${signedByRelationship.toLowerCase()})`,
+      },
+      versionText
+        ? {
+            label: "País / versión:",
+            value: versionText,
+          }
+        : null,
+    ].filter(Boolean),
+  })
+
+  let y = startY
+
   // Helper para salto de página
-  const ensureSpace = (doc, y, extra = 40) => {
-    const effectiveHeight = pageHeight - 60 // pequeña reserva al fondo
-    if (y + extra <= effectiveHeight) return y
-    doc.addPage()
+  const ensureSpace = (docInstance, currentY, extra = 40) => {
+    const effectiveHeight = pageHeight - 60 // margen inferior
+    if (currentY + extra <= effectiveHeight) return currentY
+    docInstance.addPage()
     return 40
   }
 
@@ -105,98 +155,29 @@ export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
   }
 
   // ---------------------------
-  // TÍTULO
-  // ---------------------------
-  doc.setFont("helvetica", "bold")
-  doc.setFontSize(16)
-  doc.text("Consentimiento informado para atención psicológica", marginLeft, y)
-  y += 24
-
-  doc.setFontSize(11)
-  doc.setFont("helvetica", "normal")
-  writeParagraph(
-    "Uso de herramientas digitales y expediente clínico electrónico (Alfa-Doc)",
-    { bold: true, before: 0, after: 12 }
-  )
-
-  // ---------------------------
-  // ENCABEZADO PACIENTE / CONSENTIMIENTO
-  // ---------------------------
-  doc.setFont("helvetica", "bold")
-  doc.text(`Nombre de la persona usuaria:`, marginLeft, y)
-  doc.setFont("helvetica", "normal")
-  doc.text(` ${patientName}`, marginLeft + 210, y)
-  y += 16
-
-  doc.setFont("helvetica", "bold")
-  doc.text(`Número de identificación:`, marginLeft, y)
-  doc.setFont("helvetica", "normal")
-  doc.text(` ${patientIdNumber}`, marginLeft + 210, y)
-  y += 16
-
-  doc.setFont("helvetica", "bold")
-  doc.text(`Fecha de firma:`, marginLeft, y)
-  doc.setFont("helvetica", "normal")
-  doc.text(` ${signedAtText}`, marginLeft + 210, y)
-  y += 16
-
-  doc.setFont("helvetica", "bold")
-  doc.text(`Firma de:`, marginLeft, y)
-  doc.setFont("helvetica", "normal")
-  doc.text(
-    ` ${signedName} (${signedByRelationship.toLowerCase()})`,
-    marginLeft + 210,
-    y
-  )
-  y += 16
-
-  if (countryCode || version) {
-    doc.setFont("helvetica", "bold")
-    doc.text(`País / versión:`, marginLeft, y)
-    doc.setFont("helvetica", "normal")
-    const versionTextParts = []
-    if (countryCode) versionTextParts.push(countryCode)
-    if (version) versionTextParts.push(`versión ${version}`)
-    if (localAddendumCountry && localAddendumVersion) {
-      versionTextParts.push(
-        `addendum ${localAddendumCountry} (${localAddendumVersion})`
-      )
-    }
-    const vText = versionTextParts.join(" · ")
-    doc.text(` ${vText}`, marginLeft + 210, y)
-    y += 18
-  }
-
-  y += 6
-  doc.setDrawColor(180)
-  doc.line(marginLeft, y, marginLeft + maxWidth, y)
-  y += 16
-
-  // ---------------------------
   // CUERPO DEL CONSENTIMIENTO
-  // Podemos usar rawConsentText del snapshot o un texto base
   // ---------------------------
   const rawHtml = (consent?.rawConsentText || "").trim()
-    const normalized = normalizeConsentText(rawHtml)
+  const normalized = normalizeConsentText(rawHtml)
 
-    if (normalized) {
+  if (normalized) {
     writeParagraph("Contenido del consentimiento informado:", {
-        bold: true,
-        after: 8,
+      bold: true,
+      after: 8,
     })
 
     const paragraphs = normalized.split(/\n\s*\n+/)
     paragraphs.forEach((p) => {
-        const text = p.trim()
-        if (!text || text.indexOf("_") > 0) return
-        writeParagraph(text, { bold: false, after: 6 })
+      const text = p.trim()
+      if (!text || text.indexOf("_") > 0) return
+      writeParagraph(text, { bold: false, after: 6 })
     })
-    } else {
+  } else {
     writeParagraph(
-        "Contenido del consentimiento informado no disponible.",
-        { bold: true, after: 10 }
+      "Contenido del consentimiento informado no disponible.",
+      { bold: true, after: 10 }
     )
-    }
+  }
 
   // ---------------------------
   // SECCIÓN DE FIRMA
@@ -227,11 +208,10 @@ export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
   doc.text(signedName, lineX, lineY - 6)
 
   // Imagen de firma digital (si existe)
-  if (consent?.signatureUri) {
+  if (consent?.signatureUri && signatureImageBase64) {
     try {
-      // Ajustamos tamaño de imagen de firma
       const imgWidth = 180
-      const imgHeight = 70
+      const imgHeight = 50
       const imgX = lineX + maxWidth - imgWidth // alineamos a la derecha
       const imgY = lineY - imgHeight - 10
 
@@ -244,21 +224,51 @@ export function generateConsentPdf({ patient, consent, signatureImageBase64 }) {
         imgHeight
       )
 
-      doc.setFont("helvetica", "xs" || "normal")
+      doc.setFont("helvetica", "normal")
       doc.setFontSize(8)
-      doc.text("Firma digital registrada en Alfa-Doc", imgX, imgY + imgHeight + 10)
+      doc.text(
+        "Firma digital registrada en Alfa-Doc",
+        imgX,
+        imgY + imgHeight + 10
+      )
       doc.setFontSize(11)
     } catch (err) {
       console.warn("No se pudo agregar la imagen de la firma al PDF:", err)
     }
   }
 
-  y = lineY + 40
+  // ---------------------------
+  // FOOTER
+  // ---------------------------
+  const footerY = pageHeight - 30
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
   doc.setTextColor(120)
-  const footer = `Generado por Alfa-Doc — ${new Date().toLocaleString()}`
-  doc.text(footer, marginLeft, pageHeight - 30)
+  // const footer = `Generado por Alfa-Doc — ${new Date().toLocaleString()}`
+  // doc.text(footer, marginLeft, footerY)
+  const pageCount = doc.getNumberOfPages()
+  for (let i = 1; i <= pageCount; i++) {
+  doc.setPage(i)
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(9)
+  doc.setTextColor(120)
+
+  const posY = doc.internal.pageSize.getHeight() - 18
+  const pageWidth = doc.internal.pageSize.getWidth()
+
+  doc.text(
+    `Generado por Alfa-Doc · ${new Date().toLocaleDateString()}`,
+    40,
+    posY
+  )
+
+  doc.text(
+    `Página ${i} de ${pageCount}`,
+    pageWidth - 40,
+    posY,
+    { align: "right" }
+  )
+}
 
   return doc.output("blob")
 }

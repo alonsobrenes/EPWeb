@@ -19,6 +19,7 @@ import { ProfileApi } from '../../api/profileApi'
 import PatientSessionsTab from './PatientSessionsTab'
 import EditableInterviewHashtags from "../../components/hashtags/EditableInterviewHashtags"
 import PatientConsentTab from './PatientConsentTab'
+import { buildAutoTestResults } from "../../utils/buildAutoTestResults"
 
 function FieldLabel({ children }) {
   return <Text textStyle="sm" color="fg.muted" mb="1">{children}</Text>
@@ -196,6 +197,7 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
         patient: { id: patientId, name: patientName },
         transcript: data?.transcriptText || '',
         draft: data?.draftContent || '',
+        clinicianDiagnosis: data?.clinicianDiagnosis || '',
       })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -241,8 +243,8 @@ function PatientFirstInterviewTab({ patientId, patientName }) {
           </Text>
         </HStack>
         <HStack gap="2">
-          <Button onClick={goInterview} variant="subtle">Abrir</Button>
-          <Button onClick={exportPdf} variant="outline" isLoading={busyPdf} loadingText="Generando…">Exportar PDF</Button>
+          {/* <Button onClick={goInterview} variant="subtle">Abrir</Button> */}
+          {/* <Button onClick={exportPdf} variant="outline" isLoading={busyPdf} loadingText="Generando…">Exportar PDF</Button> */}
         </HStack>
       </HStack>
 
@@ -666,8 +668,9 @@ style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--chakra-c
 }
 
 
+
 // ====================== Historial del paciente ======================
- function PatientHistory({ patientId, patientName, onClose, highlightAttemptId = null, backTo, readOnly }) {
+ function PatientHistory({ patientId, patientName, onClose, highlightAttemptId = null, backTo, readOnly, patientIdentification }) {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
@@ -884,18 +887,26 @@ async function downloadRow(row) {
         value: a.answerValue ?? a.value ?? null,
         values: Array.isArray(a.values)
           ? a.values
-          : (typeof a.answerValuesJson === 'string' ? (() => { try { return JSON.parse(a.answerValuesJson) } catch { return [] } })() : []),
+          : (typeof a.answerValuesJson === 'string'
+              ? (() => { try { return JSON.parse(a.answerValuesJson) } catch { return [] } })()
+              : []),
       }
     }
 
-    // 2) Construir un "pdfModel" según sea SACKS o NO-SACKS
     const isSacks = (testName || '').toUpperCase().includes('SACK')
     let pdfModel = null
+    let results = null   // 🔹 aquí vamos a llenar el resumen por escalas
 
     if (isSacks || scoring === 'clinician') {
-      // ---- SACKS: necesitamos grupos/ítems para el orden y los títulos ----
-      const scWrap = await ClinicianApi.getScalesWithItems(testId) // {scales:[{name,code,items:[{id,code,text}]}]}
-      const scales = scWrap?.scales || []
+      // ========== CASO SACKS ==========
+      const [scalesWrap, revWrap] = await Promise.all([
+        ClinicianApi.getScalesWithItems(testId),
+        ClinicianApi.getReview(attemptId),
+      ])
+
+      const scales = Array.isArray(scalesWrap?.scales) ? scalesWrap.scales : []
+
+      // 2.a) pdfModel para preguntas/respuestas (igual que antes)
       const sections = scales.map(sc => ({
         code: sc.code || '',
         name: sc.name || '',
@@ -906,12 +917,110 @@ async function downloadRow(row) {
         }))
       }))
       pdfModel = { kind: 'sacks', sections }
+
+      // 2.b) Resultados por escala (idéntico a useMemo de ReviewSacksReadOnly)
+      const rev = revWrap?.review || null
+      const valsByScaleId = {}
+
+      if (rev?.scales?.length) {
+        for (const r of rev.scales) {
+          valsByScaleId[r.scaleId] = {
+            value: r.isUncertain ? "X" : (r.score == null ? null : String(r.score)),
+            notes: r.notes || "",
+          }
+        }
+      }
+
+      const out = []
+      let totalRaw = 0
+      let sumPct = 0
+      let cntPct = 0
+
+      for (const s of scales) {
+        const val = valsByScaleId[s.id]?.value ?? null
+        const min = 0
+        const max = 2
+        let raw = null
+        let percent = null
+
+        if (val === "0" || val === "1" || val === "2") {
+          raw = Number(val)
+          percent = (raw - min) / (max - min) * 100
+          totalRaw += raw
+          sumPct += percent
+          cntPct++
+        }
+
+        out.push({
+          scaleId: s.id,
+          scaleCode: s.code,
+          scaleName: s.name,
+          raw: raw ?? 0,
+          min,
+          max,
+          percent,
+        })
+      }
+
+      const totalPercent = cntPct > 0 ? (sumPct / cntPct) : null
+      results = { totalRaw, totalPercent, scales: out }
     } else {
-      // ---- NO-SACKS: preguntas + opciones ----
+      // ========== CASO TEST "SIMPLE" ==========
+      // Igual que en ReviewSimpleReadOnly: cargamos preguntas + opciones,
+      // normalizamos, y a partir de eso calculamos resultados.
+
       const [qsRun, optsRun] = await Promise.all([
         TestsApi.getQuestions(testId),
         TestsApi.getQuestionOptionsByTest(testId),
       ])
+
+      // Helpers normalizeType / buildLikertOptions / buildYesNoOptions
+      function normalizeType(qtRaw) {
+        const t = String(qtRaw || "").toLowerCase().trim()
+        if (!t) return "open"
+        if (t === "open_text" || t === "open" || t === "text" || t === "open-ended" || t === "written" || t === "essay") return "open"
+        if (t.includes("multi")) return "multi"
+        if (t === "single" || t === "choice" || t.includes("radio")) return "single"
+        if (t === "yesno" || t === "yes-no" || t === "yes_no" || t === "yn" || t === "bool" || t === "boolean") return "single"
+        if (t === "likert" || t.startsWith("likert")) return "single"
+        return "open"
+      }
+      function parseLikertSpec(rawType) {
+        const t = String(rawType || "").toLowerCase().trim()
+        if (!t.startsWith("likert")) return null
+        let m = t.match(/likert[\s_-]*?(\d+)[\s_-]+(\d+)/)
+        if (m) {
+          const a = parseInt(m[1], 10), b = parseInt(m[2], 10)
+          if (Number.isFinite(a) && Number.isFinite(b) && b >= a) return { start: a, end: b }
+        }
+        m = t.match(/likert[\s_-]*?(\d+)/)
+        if (m) {
+          const n = parseInt(m[1], 10)
+          if (Number.isFinite(n) && n >= 2) return { start: 1, end: n }
+        }
+        return { start: 1, end: 4 }
+      }
+      function defaultLikertLabels(start, end) {
+        const count = end - start + 1
+        if (start === 0 && end === 3) return ["Nunca", "A veces", "A menudo", "Siempre"]
+        if (start === 1 && end === 4) return ["Nunca", "Algunas veces", "Bastante", "Siempre"]
+        return Array.from({ length: count }, (_, i) => `${start + i}`)
+      }
+      function buildLikertOptions(rawType, qid) {
+        const spec = parseLikertSpec(rawType) || { start: 1, end: 4 }
+        const { start, end } = spec
+        const labels = defaultLikertLabels(start, end)
+        return Array.from({ length: end - start + 1 }, (_, i) => {
+          const value = start + i
+          return { id: `${qid}-likert-${value}`, value, label: labels[i] ?? String(value), order: i + 1 }
+        })
+      }
+      function buildYesNoOptions(qid) {
+        return [
+          { id: `${qid}-yesno-1`, value: 1, label: "Sí", order: 1 },
+          { id: `${qid}-yesno-0`, value: 0, label: "No", order: 2 },
+        ]
+      }
 
       const byQ = new Map()
       for (const o of (optsRun || [])) {
@@ -926,31 +1035,35 @@ async function downloadRow(row) {
         const rawType = q.questionType || q.question_type
         const baseType = normalizeType(rawType)
         const options = (byQ.get(q.id) || []).slice()
-        const rtl = String(rawType || '').toLowerCase()
-        if (rtl.startsWith('likert') && options.length === 0) buildLikertOptions(rawType, q.id).forEach(o => options.push(o))
-        if ((rtl === 'yesno' || rtl === 'yes-no' || rtl === 'yes_no' || rtl === 'yn' || rtl === 'bool' || rtl === 'boolean') && options.length === 0)
-          buildYesNoOptions(q.id).forEach(o => options.push(o))
+        const rtl = String(rawType || "").toLowerCase()
+
+        if (rtl.startsWith("likert") && options.length === 0) buildLikertOptions(rawType, q.id).forEach(o => options.push(o))
+        if ((rtl === "yesno" || rtl === "yes-no" || rtl === "yes_no" || rtl === "yn" || rtl === "bool" || rtl === "boolean") && options.length === 0)
+          buildYesNoOptions(rawType, q.id).forEach(o => options.push(o))
+
         const finalType =
-          (baseType === 'open')  ? 'open'  :
-          (baseType === 'multi') ? 'multi' :
-          (options.length > 0)   ? 'single' : baseType
+          (baseType === "open")  ? "open"  :
+          (baseType === "multi") ? "multi" :
+          (options.length > 0)   ? "single" : baseType
+
         return {
           id: q.id,
           code: q.code,
           text: q.text,
-          rawType: rawType || '',
+          rawType: rawType || "",
           type: finalType,
           order: q.orderNo || q.order_no || 0,
           options,
         }
       }).sort((a, b) => (a.order - b.order))
 
-      // detectar CDI/triadas (3 opciones en casi todas las preguntas)
-      const with3 = questions.filter(q => (q.type === 'single' || q.type === 'multi') && (q.options?.length === 3)).length
+      // 2.a) pdfModel para preguntas/respuestas (igual que antes)
+      const with3 = questions.filter(q =>
+        (q.type === 'single' || q.type === 'multi') && (q.options?.length === 3)
+      ).length
       const isTriads = questions.length > 0 && with3 >= Math.max(3, Math.floor(questions.length * 0.9))
 
       if (isTriads) {
-        // Modelo "triadas"
         const rows = questions.map(q => {
           const a = answersByQ[q.id] || {}
           const val = a.value != null ? String(a.value) : null
@@ -960,13 +1073,11 @@ async function downloadRow(row) {
           return {
             code: q.code,
             optionTexts: opts.map(o => o.label || ''),
-            marks: selected, // [bool,bool,bool]
+            marks: selected,
           }
         })
         pdfModel = { kind: 'triads', rows }
       } else {
-        // Modelo general (Sí/No, Likert, multi)
-        // columnas canónicas: unión ordenada de labels de todas las opciones
         const seen = new Set(), columns = []
         for (const q of questions) {
           if ((q.type === 'single' || q.type === 'multi') && q.options?.length) {
@@ -994,25 +1105,50 @@ async function downloadRow(row) {
         })
         pdfModel = { kind: 'general', columns, rows }
       }
+
+      // 2.b) Resultados por escalas usando el mismo cálculo que ReviewSimpleReadOnly
+      // 2.b) Resultados por escalas usando el helper compartido
+      results = await buildAutoTestResults({
+        testId,
+        attemptId,
+        patientId,
+        questions,
+        answersByQ,
+      })
+
     }
 
-    // 3) Generar PDF (sin resultados ni sumarios)
-    await generateAttemptPdf({
+    const blob = await generateAttemptPdf({
       scoringMode: scoring,
       patientName,
-      patientId,
+      patientId:patientIdentification,
       testName,
       attemptId,
       dateIso,
-      answers: answersRaw,   // se mantiene por compatibilidad
-      pdfModel,              // NUEVO: layout de respuestas
+      answers: answersRaw,
+      pdfModel,
+      results,
+      includeAnswers: false
     })
+    const safeTestName = (testName || "Test").replace(/[^\w\d\-]+/g, "_")
+    const safePatientName = (patientName || "Paciente").replace(/[^\w\d\-]+/g, "_")
+    const fileName = `${safeTestName}-${safePatientName}.pdf`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
   } catch (e) {
     toaster.error({ title: 'No se pudo generar el PDF', description: e?.message || 'Error' })
   } finally {
     setDownloadingId(null)
   }
 }
+
+
 
 
   async function deleteDraft(row) {
@@ -1209,6 +1345,8 @@ export default function PatientDialog({
   const qsAttachmentId  = params.get('attachment_id') || null
   const qsAttemptId  = params.get('attempt_id') || null
   const [innerSessionId, setInnerSessionId] = useState(qsSessionId)
+  const patientIdentification = initialValues?.identificationNumber || ''
+
   useEffect(() => {
     setInnerSessionId(qsSessionId)
   }, [qsSessionId])
@@ -1328,7 +1466,6 @@ export default function PatientDialog({
   const patientId = initialValues?.id || null
   const patientName = [form.firstName, form.lastName1, form.lastName2].filter(Boolean).join(' ')
   const hasId = !!patientId
-
   return (
     <Dialog.Root
       key={patientId || 'new'}
@@ -1522,6 +1659,7 @@ export default function PatientDialog({
                       onClose={onClose}
                       backTo={backTo}
                       readOnly={readOnly}
+                      patientIdentification={patientIdentification}
                     />
                   </Tabs.Content>
 
