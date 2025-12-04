@@ -738,21 +738,30 @@ export default function PatientConsentTab({
               consent,
               signatureImageBase64
             })
+            const fileName = `consentimiento-${patientName || "paciente"}.pdf`
             const url = URL.createObjectURL(blob)
-            const win = window.open(url, "_blank")
-            if (!win) {
-              // fallback: descarga directa
-              const a = document.createElement("a")
-              a.href = url
-              a.download = `consentimiento-${consent.patientId || "paciente"}.pdf`
-              a.click()
-            }
+            const a = document.createElement("a")
+            a.href = url
+            a.download = fileName
+            document.body.appendChild(a)
+            a.click()
+            a.remove()
+            URL.revokeObjectURL(url)
+            // const url = URL.createObjectURL(blob)
+            // const win = window.open(url, "_blank")
+            // if (!win) {
+            //   // fallback: descarga directa
+            //   const a = document.createElement("a")
+            //   a.href = url
+            //   a.download = `consentimiento-${consent.patientId || "paciente"}.pdf`
+            //   a.click()
+            // }
           } catch (err) {
             console.error("Error generando PDF de consentimiento:", err)
           }
         }}
       >
-        Imprimir / Descargar PDF
+        Descargar PDF
       </Button>
       <Text textStyle="sm">
         <strong>Firmado por:</strong> {consent.signedName}

@@ -58,7 +58,7 @@ const groupsSolo = [
     ],
   },
   {
-    id: "cuenta",
+    id: "cuenta_editor",
     title: "Cuenta",
     roles: [ROLES.EDITOR],
     items: [
@@ -67,7 +67,7 @@ const groupsSolo = [
     ],
   },
   {
-    id: "cuenta",
+    id: "cuenta_viewer",
     title: "Cuenta",
     roles: [ROLES.VIEWER],
     items: [
@@ -240,7 +240,6 @@ function deriveDisplay(currentUser) {
       "").trim()
 
   const role = currentUser?.role || deriveRoleFromPayload(payload) || ""
-
   const rawAvatar =
     cachedAvatar || cached?.avatarUrl || currentUser?.avatarUrl || ""
 
@@ -538,8 +537,6 @@ export default function AppShellSidebarCollapsible() {
     // Navega (push) a resultados
     navigate(`/app/search?${sp.toString()}`);
   };
-
-
   useEffect(() => {
     const uid = deriveUid();
     if (!uid) return; // sin token aún
