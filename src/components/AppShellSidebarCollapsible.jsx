@@ -260,45 +260,41 @@ function deriveDisplay(currentUser) {
 
 
 function SecureAvatar({ avatarUrl, initials, size = "sm", alt = "Avatar" }) {
-  const [src, setSrc] = useState(avatarUrl || "")
+  const [avatarImageUrl, setAvatarImageUrl] = useState("")
+  const [loadingAvatarImage, setLoadingAvatarImage] = useState(false)
 
   useEffect(() => {
-    const uid = deriveUid()
-    if (!uid) {
-      setSrc(avatarUrl || "")
-      return
-    }
+    setAvatarImageUrl("")
 
+    if (!avatarUrl) return
+
+    const uid = deriveUid()
     const cacheKey = `ep:avatarUrl:${uid}`
 
-    const loadFromCache = () => {
-      try {
-        const cached =
-          localStorage.getItem(cacheKey) ||
-          localStorage.getItem("ep:avatarUrl") || ""
-        if (cached) {
-          setSrc(cached)
-        } else {
-          setSrc(avatarUrl || "")
-        }
-      } catch {
-        setSrc(avatarUrl || "")
+    async function fetchAvatar() {
+      const cached = localStorage.getItem(cacheKey)
+      if (cached) {
+        setAvatarImageUrl(cached)
+        setLoadingAvatarImage(false)
+        return
       }
     }
 
-    // Cargar al montar / cuando cambia avatarUrl
-    loadFromCache()
-
-    // Escuchar cambios desde ProfilePage
-    window.addEventListener("ep:profile-updated", loadFromCache)
-    return () => window.removeEventListener("ep:profile-updated", loadFromCache)
+    fetchAvatar()
+    window.addEventListener("ep:profile-updated", fetchAvatar)
+     return () => window.removeEventListener("ep:profile-updated", fetchAvatar)
   }, [avatarUrl])
 
   return (
+     <>
+     {loadingAvatarImage ? <HStack color="fg.muted"><Spinner /><Text>Cargando…</Text></HStack> : null }
     <Avatar.Root size={size}>
-      {src ? <Avatar.Image src={src} alt={alt} /> : null}
+      {avatarImageUrl ? (
+                    <Avatar.Image src={avatarImageUrl} alt="Avatar" />
+                  ) : null}
       <Avatar.Fallback>{initials}</Avatar.Fallback>
     </Avatar.Root>
+    </>
   )
 }
 
@@ -594,11 +590,6 @@ export default function AppShellSidebarCollapsible() {
     window.addEventListener("ep:profile-updated", onUpdated);
     return () => window.removeEventListener("ep:profile-updated", onUpdated);
   }, []);
-  // useEffect(() => {
-  //   const h = () => forceUpdate()
-  //   window.addEventListener("ep:profile-updated", h)
-  //   return () => window.removeEventListener("ep:profile-updated", h)
-  // }, [])
   const { logout, user: authUser } = useAuth()
   const user = authUser ?? getCurrentUser()
   const navigate = useNavigate()

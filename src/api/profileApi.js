@@ -71,6 +71,40 @@ export const ProfileApi = {
         })
     return data // { items: [...] }
   },
+  async updateProfile({
+    firstName,
+    lastName1,
+    lastName2,
+    phone,
+    titlePrefix,
+    licenseNumber,
+  }) {
+    const { data } = await client.put("/Users/me", {
+      firstName,
+      lastName1,
+      lastName2,
+      phone,
+      titlePrefix,
+      licenseNumber,
+    })
+    return data
+  },
+    async uploadSignature(dataUrl) {
+    const { data } = await client.post(
+      '/Users/me/signature',
+      { dataUrl },
+      { headers: withOrgHeader() }
+    )
+    return data
+  },
+
+  async deleteSignature() {
+    await client.delete('/Users/me/signature', {
+      headers: withOrgHeader(),
+    })
+  },
+
+
 }
 
 export default ProfileApi

@@ -10,7 +10,7 @@ import { ProfileApi } from "../../api/profileApi"
 import { PatientsApi } from "../../api/patientsApi"
 import PatientDialog from "./PatientDialog"
 import { LuExternalLink } from "react-icons/lu"
-
+import client, { apiOrigin } from "../../api/client"
 function initialsFromEmail(email) {
   if (!email) return "U"
   const left = email.split("@")[0] || ""
@@ -18,6 +18,60 @@ function initialsFromEmail(email) {
   const a = parts[0]?.[0] || ""
   const b = parts[1]?.[0] || ""
   return (a + b || a || "U").toUpperCase()
+}
+
+function absolutizeApiUrl(url) {
+  if (!url) return ""
+  if (/^https?:\/\//i.test(url)) return url
+  const origin = apiOrigin()
+  return origin ? origin + (url.startsWith("/") ? "" : "/") + url : url
+}
+
+function SecureAvatar({ avatarUrl, initials }) {
+  const [avatarImageUrl, setAvatarImageUrl] = useState("")
+  const [loadingAvatarImage, setLoadingAvatarImage] = useState(false)
+
+  useEffect(() => {
+    setAvatarImageUrl("")
+    if (!avatarUrl) return
+
+    async function fetchAvatar() {
+      try {
+        setLoadingAvatarImage(true)
+
+        const res = await client.get(absolutizeApiUrl(avatarUrl), { responseType: "blob" })
+
+        const reader = new FileReader()
+        reader.readAsDataURL(res.data)
+
+        reader.onloadend = function () {
+          const base64data = reader.result
+          setAvatarImageUrl(base64data)
+          try { window.dispatchEvent(new Event("ep:profile-updated")) } catch {}
+        }
+      } catch (err) {
+        console.error("Error cargando avatar:", err)
+      } finally {
+        setLoadingAvatarImage(false)
+      }
+    }
+  
+    fetchAvatar()
+  }, [avatarUrl])
+
+  return (
+     <>
+     <HStack align="center" gap="4" flexWrap="wrap">
+     {loadingAvatarImage ? <HStack color="fg.muted"><Spinner /><Text>Cargando…</Text></HStack> : <Avatar.Root css={{ '--avatar-size': 'sizes.32', '--avatar-font-size': 'fontSizes.3xl' }} borderWidth="1px"
+                              borderColor="blackAlpha.50">
+      {avatarImageUrl ? (
+                    <Avatar.Image src={avatarImageUrl} alt="Avatar" />
+                  ) : null}
+      <Avatar.Fallback>{initials}</Avatar.Fallback>
+    </Avatar.Root> }
+    </HStack>
+    </>
+  )
 }
 
 /** Sección de etiquetas (igual a la validada antes) */
@@ -137,7 +191,18 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
   const [sortKey, setSortKey] = useState("name") // 'id' | 'name' | 'sex' | 'contact' | 'status' | 'updated'
   const [sortDir, setSortDir] = useState("asc")  // 'asc' | 'desc'
 
+  //Firma
+  const [professionalSignatureDataUrl, setProfessionalSignatureDataUrl] = useState("")
+  const [loadingProfessionalSignature, setLoadingProfessionalSignature] = useState(false)
+
   const initials = useMemo(() => initialsFromEmail(user?.email), [user])
+  const displayName = useMemo(() => {
+    if (!user) return "Profesional"
+    const parts = [user.firstName, user.lastName1, user.lastName2].filter(Boolean).join(" ")
+    const base = parts || user.email || "Profesional"
+    return (user.titlePrefix ? `${user.titlePrefix} ` : "") + base
+  }, [user])
+
 
   const clinicianUserId = useMemo(() => {
     if (typeof userId === 'number') return userId
@@ -216,6 +281,63 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
     }
     // Si no se encuentra, no hacemos nada (quizá el clínico no tiene ese paciente; comportamiento seguro)
   }, [isOpen, tabValue, initialPatientIdToOpen, patients])
+
+  useEffect(() => {
+  setProfessionalSignatureDataUrl("")
+
+  if (!user || !user.signatureImageUrl) {
+    setLoadingProfessionalSignature(false)
+    return
+  }
+
+  const rawUrl = user.signatureImageUrl
+
+  if (rawUrl.startsWith("data:image/")) {
+    setProfessionalSignatureDataUrl(rawUrl)
+    setLoadingProfessionalSignature(false)
+    return
+  }
+
+  let requestUrl = rawUrl
+
+  if (requestUrl.startsWith("/api/")) {
+    requestUrl = requestUrl.substring(4) // "/api".length === 4
+  }
+
+  if (requestUrl.startsWith("http://") || requestUrl.startsWith("https://")) {
+    // no tocamos nada
+  }
+
+  let alive = true
+
+  async function fetchSignature() {
+    try {
+      setLoadingProfessionalSignature(true)
+      const res = await client.get(requestUrl, { responseType: "blob" })
+
+      if (!alive) return
+
+      const reader = new FileReader()
+      reader.readAsDataURL(res.data)
+      reader.onloadend = function () {
+        if (!alive) return
+        const base64data = reader.result
+        setProfessionalSignatureDataUrl(base64data)
+      }
+    } catch (err) {
+      console.error("Error cargando firma profesional (ProfessionalDialog):", err)
+    } finally {
+      if (alive) setLoadingProfessionalSignature(false)
+    }
+  }
+
+  fetchSignature()
+
+  return () => {
+    alive = false
+  }
+}, [user])
+
 
   // Helpers para celdas
   function fullNameOf(row) {
@@ -319,7 +441,6 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
     setPatientDialogOpen(false)
     setSelectedPatientId(null)
   }
-
   return (
     <>
     <Dialog.Root role="dialog" open={isOpen}
@@ -378,36 +499,129 @@ export default function ProfessionalDialog({ isOpen, onClose, userId, userGuid, 
                       <VStack align="stretch" gap="3">
                         <HStack align="start" gap="6">
                           <VStack align="start" gap="1" flex="1" minW={0}>
-                            <Heading size="md" noOfLines={1}>{user?.email || "Profesional"}</Heading>
-                            {!!user?.userRole && (<Text color="fg.muted">{user.userRole}</Text>)}
-                            {!!user?.name && (<Text color="fg.muted">{user.name}</Text>)}
+                            <Heading size="md" noOfLines={1}>{displayName}</Heading>
+                            {!!user?.memberRole && (
+                              <Text color="fg.muted">{user.memberRole}</Text>
+                            )}
+                            {!!user?.userRole && !user?.memberRole && (
+                              <Text color="fg.muted">{user.userRole}</Text>
+                            )}
+                            {!!user?.email && (
+                              <Text color="fg.muted">{user.email}</Text>
+                            )}
+
 
                             <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap={3} mt="3">
                               <GridItem>
                                 <Text textStyle="sm" color="fg.muted" mb="1">Email</Text>
                                 <div style={{
-                                  padding: 8, border: "1px solid var(--chakra-colors-border)",
-                                  borderRadius: 6, background: "var(--chakra-colors-bg-subtle)"
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
                                 }}>{user?.email || "—"}</div>
                               </GridItem>
+
                               <GridItem>
                                 <Text textStyle="sm" color="fg.muted" mb="1">Rol</Text>
                                 <div style={{
-                                  padding: 8, border: "1px solid var(--chakra-colors-border)",
-                                  borderRadius: 6, background: "var(--chakra-colors-bg-subtle)"
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
                                 }}>{user?.memberRole || user?.userRole || "—"}</div>
                               </GridItem>
+
+                              <GridItem>
+                                <Text textStyle="sm" color="fg.muted" mb="1">Nombre</Text>
+                                <div style={{
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
+                                }}>{user?.firstName || "—"}</div>
+                              </GridItem>
+
+                              <GridItem>
+                                <Text textStyle="sm" color="fg.muted" mb="1">Apellidos</Text>
+                                <div style={{
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
+                                }}>{[user?.lastName1, user?.lastName2].filter(Boolean).join(" ") || "—"}</div>
+                              </GridItem>
+
+                              <GridItem>
+                                <Text textStyle="sm" color="fg.muted" mb="1">Teléfono</Text>
+                                <div style={{
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
+                                }}>{user?.phone || "—"}</div>
+                              </GridItem>
+
+                              <GridItem>
+                                <Text textStyle="sm" color="fg.muted" mb="1">Licencia</Text>
+                                <div style={{
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
+                                }}>{user?.licenseNumber || "—"}</div>
+                              </GridItem>
+
+                              <GridItem>
+                                <Text textStyle="sm" color="fg.muted" mb="1">Prefijo / título</Text>
+                                <div style={{
+                                  padding: 8,
+                                  border: "1px solid var(--chakra-colors-border)",
+                                  borderRadius: 6,
+                                  background: "var(--chakra-colors-bg-subtle)"
+                                }}>{user?.titlePrefix || "—"}</div>
+                              </GridItem>
                             </Grid>
+
                           </VStack>
 
                           <VStack align="center" minW="220px">
-                            <Avatar.Root css={{ '--avatar-size': 'sizes.32', '--avatar-font-size': 'fontSizes.3xl' }} borderWidth="1px"
+                            {/* <Avatar.Root css={{ '--avatar-size': 'sizes.32', '--avatar-font-size': 'fontSizes.3xl' }} borderWidth="1px"
                               borderColor="blackAlpha.50">
                               <Avatar.Fallback name={initials} />
                               {user?.avatarUrl ? (
                                 <Avatar.Image src={user.avatarUrl} alt={user.email} />
                               ) : null}
-                            </Avatar.Root>
+                            </Avatar.Root> */}
+                            <SecureAvatar avatarUrl={absolutizeApiUrl(user.avatarUrl)} />>
+                            {(professionalSignatureDataUrl || loadingProfessionalSignature) && (
+                              <VStack align="flex-start" gap="2">
+                                <Text fontSize="sm" fontWeight="medium">
+                                  Firma del profesional
+                                </Text>
+
+                                {loadingProfessionalSignature && !professionalSignatureDataUrl ? (
+                                  <HStack color="fg.muted">
+                                    <Spinner size="xs" />
+                                    <Text fontSize="xs">Cargando firma…</Text>
+                                  </HStack>
+                                ) : (
+                                  professionalSignatureDataUrl && (
+                                    <Box
+                                      as="img"
+                                      src={professionalSignatureDataUrl}
+                                      alt="Firma del profesional"
+                                      maxH="120px"
+                                      borderRadius="md"
+                                      borderWidth="1px"
+                                      bg="white"
+                                    />
+                                  )
+                                )}
+                              </VStack>
+                            )}
+
+
                           </VStack>
                         </HStack>
                       </VStack>

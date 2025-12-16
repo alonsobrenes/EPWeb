@@ -7,11 +7,10 @@ import {
 } from '@chakra-ui/react'
 import { useLocation } from 'react-router-dom'
 import { FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiEdit2 } from 'react-icons/fi'
-import client from '../../api/client'
+import client, { apiOrigin } from "../../api/client"
 import { toaster } from '../../components/ui/toaster'
 import { Tip } from '../../components/ui/tooltip'
 import ProfessionalDialog from './ProfessionalDialog'
-
 
 
 function getErrorMessage(error) {
@@ -79,6 +78,58 @@ function textColorForHex(hex) {
   return luminance > 150 ? 'black' : 'white'
 }
 
+function absolutizeApiUrl(url) {
+  if (!url) return ""
+  if (/^https?:\/\//i.test(url)) return url
+  const origin = apiOrigin()
+  return origin ? origin + (url.startsWith("/") ? "" : "/") + url : url
+}
+
+function SecureAvatar({ avatarUrl, initials, size = "sm", alt = "Avatar" }) {
+  const [avatarImageUrl, setAvatarImageUrl] = useState("")
+  const [loadingAvatarImage, setLoadingAvatarImage] = useState(false)
+
+  useEffect(() => {
+    setAvatarImageUrl("")
+    if (!avatarUrl) return
+
+    async function fetchAvatar() {
+      try {
+        setLoadingAvatarImage(true)
+
+        const res = await client.get(absolutizeApiUrl(avatarUrl), { responseType: "blob" })
+
+        const reader = new FileReader()
+        reader.readAsDataURL(res.data)
+
+        reader.onloadend = function () {
+          const base64data = reader.result
+          setAvatarImageUrl(base64data)
+          try { window.dispatchEvent(new Event("ep:profile-updated")) } catch {}
+        }
+      } catch (err) {
+        console.error("Error cargando avatar:", err)
+      } finally {
+        setLoadingAvatarImage(false)
+      }
+    }
+  
+    fetchAvatar()
+  }, [avatarUrl])
+
+  return (
+     <>
+     <HStack align="center" gap="4" flexWrap="wrap">
+     {loadingAvatarImage ? <HStack color="fg.muted"><Spinner /><Text>Cargando…</Text></HStack> : <Avatar.Root size={size}>
+      {avatarImageUrl ? (
+                    <Avatar.Image src={avatarImageUrl} alt="Avatar" />
+                  ) : null}
+      <Avatar.Fallback>{initials}</Avatar.Fallback>
+    </Avatar.Root> }
+    </HStack>
+    </>
+  )
+}
 
 export default function ProfessionalsPage() {
   const location = useLocation()
@@ -201,34 +252,46 @@ export default function ProfessionalsPage() {
     }
     return Array.from(s).sort()
   }, [members])
-
   const valueGetter = useMemo(() => ({
     email:   (r) => (r.email || '').toLowerCase(),
     role:    (r) => ((r.memberRole || r.userRole || '') + '').toLowerCase(),
     created: (r) => new Date(r.createdAtUtc).getTime() || 0,
   }), [])
-
   const filteredSorted = useMemo(() => {
     const term = (search || '').trim().toLowerCase()
-    const get = valueGetter[sortBy] || valueGetter.email
+    const get = valueGetter[sortBy] || valueGetter.name || valueGetter.email
+
     const arr = (members || []).filter(m => {
       if (roleFilter !== 'all') {
         const rr = (m.memberRole || m.userRole || '').toLowerCase()
         if (rr !== roleFilter) return false
       }
       if (!term) return true
-      const txt = `${m.email || ''} ${(m.memberRole || m.userRole || '')}`.toLowerCase()
+
+      const fullName = [m.firstName, m.lastName1, m.lastName2].filter(Boolean).join(' ')
+      const withPrefix = (m.titlePrefix ? `${m.titlePrefix} ` : '') + (fullName || '')
+      const txt = [
+        m.email || '',
+        m.phone || '',
+        m.licenseNumber || '',
+        withPrefix,
+        (m.memberRole || m.userRole || '')
+      ].join(' ').toLowerCase()
+
       return txt.includes(term)
     })
+
     arr.sort((a, b) => {
       const va = get(a)
       const vb = get(b)
       if (va < vb) return sortDir === 'asc' ? -1 : 1
-      if (va > vb) return sortDir === 'asc' ?  1 : -1
+      if (va > vb) return sortDir === 'asc' ? 1 : -1
       return 0
     })
+
     return arr
   }, [members, search, roleFilter, sortBy, sortDir, valueGetter])
+
  
   useEffect(() => {
     if (consumedRef.current) return
@@ -285,6 +348,7 @@ export default function ProfessionalsPage() {
   const startIndex = (safePage - 1) * pageSize
   const endIndex = Math.min(startIndex + pageSize, total)
   const pageRows = filteredSorted.slice(startIndex, endIndex)
+
 
   function handleSort(col) {
     const isSame = sortBy === col
@@ -485,7 +549,7 @@ export default function ProfessionalsPage() {
           <Table.Header>
             <Table.Row>
               <Table.ColumnHeader minW="64px"><span aria-hidden="true" /></Table.ColumnHeader>
-              <SortableHeader col="email" minW="240px">Email</SortableHeader>
+              <SortableHeader col="name" minW="260px">Profesional</SortableHeader>
               <SortableHeader col="role" minW="160px">Rol</SortableHeader>
               <Table.ColumnHeader minW="220px">Etiquetas</Table.ColumnHeader>
               <SortableHeader col="created" minW="220px">Miembro desde</SortableHeader>
@@ -522,17 +586,41 @@ export default function ProfessionalsPage() {
                     onClick={() => handleRowClick(r)}
                   >
                     <Table.Cell>
-                      <Avatar.Root size="sm">
-                        <Avatar.Fallback name={initials} />
-                        {r.avatarUrl ? <Avatar.Image src={r.avatarUrl} alt={r.email || 'Avatar'} /> : null}
-                      </Avatar.Root>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Text fontWeight="600">{r.email || '-'}</Text>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge>{rol}</Badge>
-                    </Table.Cell>
+                      <SecureAvatar avatarUrl={absolutizeApiUrl(r.avatarUrl)} initials={initials} size="xl" />
+                  </Table.Cell>
+<Table.Cell>
+  {(() => {
+    const fullName = [r.firstName, r.lastName1, r.lastName2].filter(Boolean).join(' ')
+    const displayName = ((r.titlePrefix ? `${r.titlePrefix} ` : '') + (fullName || r.email || '-')).trim()
+
+    return (
+      <VStack align="start" gap="0">
+        <Text fontWeight="600" noOfLines={1}>
+          {displayName}
+        </Text>
+        <Text fontSize="xs" color="fg.muted" noOfLines={1}>
+          {r.email || '—'}
+        </Text>
+        <HStack gap="2" wrap="wrap">
+          {r.phone && (
+            <Text fontSize="xs" color="fg.muted" noOfLines={1}>
+              Tel: {r.phone}
+            </Text>
+          )}
+          {r.licenseNumber && (
+            <Text fontSize="xs" color="fg.muted" noOfLines={1}>
+              Lic: {r.licenseNumber}
+            </Text>
+          )}
+        </HStack>
+      </VStack>
+    )
+  })()}
+</Table.Cell>
+<Table.Cell>
+  <Badge>{rol}</Badge>
+</Table.Cell>
+
                     <Table.Cell>
                       <HStack gap="1" wrap="wrap">
                         {labels.length === 0 ? (

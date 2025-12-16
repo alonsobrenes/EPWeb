@@ -14,7 +14,7 @@ import OrgSettingsApi from "../../api/orgSettingsApi"
 import client from "../../api/client"
 import { toaster } from "../../components/ui/toaster"
 import {tryGetOrgId} from '../../utils/identity'
-
+import { getRole } from "../../auth/role"
 
 export default function UserSettings() {
   // ===== Logo de la organización =====
@@ -23,7 +23,8 @@ export default function UserSettings() {
   const [logoLoading, setLogoLoading] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const logoInputRef = useRef(null)
-
+  const role = getRole()
+  const canManageOrgLogo = role !== "viewer"
   useEffect(() => {
   let cancelled = false
   const orgId = tryGetOrgId()
@@ -290,6 +291,7 @@ console.log('cacheKey',cacheKey)
   return (
     <>
       {/* Logo de la organización */}
+      {canManageOrgLogo ? (
       <Card.Root p="4" mt="6">
         <HStack justify="space-between" mb="3">
           <Text fontWeight="medium">Logo de la organización</Text>
@@ -374,7 +376,7 @@ console.log('cacheKey',cacheKey)
           </VStack>
         </HStack>
       </Card.Root>
-
+      ) : null}
       {/* Etiquetas (organización) */}
       <Card.Root p="4" mt="6">
         <HStack justify="space-between" mb="2">
