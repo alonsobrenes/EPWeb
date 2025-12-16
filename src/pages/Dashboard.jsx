@@ -20,6 +20,7 @@ import { PatientsApi } from "../api/patientsApi"
 import { generatePatientsByPeriodPdf } from "../reports/generatePatientsByPeriodPdf"
 import { toaster } from "../components/ui/toaster"
 import { useOrgKind } from "../context/OrgContext"
+import { getRole } from "../auth/role"
 import {
   LuClipboardList,
   LuUsers,
@@ -285,7 +286,6 @@ function usePatientsByPeriodStats({ from, to }) {
 function useOrgPatientsByProfessionalStats({ from, to }) {
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState(null)
-console.log("XXXX",items)
   useEffect(() => {
     let cancelled = false
 
@@ -298,7 +298,6 @@ console.log("XXXX",items)
         )
 
         if (!cancelled) {
-          console.log("OrgPatientsByProfessionalStats", data)
           setItems(Array.isArray(data) ? data : [])
           setLoading(false)
         }
@@ -1147,9 +1146,8 @@ function SystemAdminDashboard(props) {
 // -----------------------------
 
 export default function Dashboard() {
-  const { role, orgKind } = getRoleAndOrgKind()
-console.log('role',role)
-console.log('orgKind',orgKind)
+  const role = getRole()
+  const { orgKind } = getRoleAndOrgKind()
   if (role === "admin") {
     return (
       <SystemAdminDashboard role={role} orgKind={orgKind} />
