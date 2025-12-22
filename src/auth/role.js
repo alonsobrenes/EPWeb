@@ -1,5 +1,5 @@
 // src/auth/role.js
-import { getCurrentUser } from "./session"
+import { getCurrentUser } from "./session";
 
 function decodeJwtPayload() {
   try {
@@ -8,16 +8,16 @@ function decodeJwtPayload() {
       sessionStorage.getItem("authToken") ||
       localStorage.getItem("token") ||
       sessionStorage.getItem("token") ||
-      ""
+      "";
 
-    const token = raw.startsWith("Bearer ") ? raw.slice(7) : raw
-    const [, payload] = token.split(".")
-    if (!payload) return {}
+    const token = raw.startsWith("Bearer ") ? raw.slice(7) : raw;
+    const [, payload] = token.split(".");
+    if (!payload) return {};
 
-    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
-    return JSON.parse(json)
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json);
   } catch {
-    return {}
+    return {};
   }
 }
 
@@ -26,22 +26,20 @@ function deriveRoleFromPayload(payload) {
     payload["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"] ||
     payload.role ||
     null
-  )
+  );
 }
 
 export function getRole() {
-  let currentUser = null
+  let currentUser = null;
   try {
-    currentUser = getCurrentUser()
+    currentUser = getCurrentUser();
   } catch {
-    currentUser = null
+    currentUser = null;
   }
 
-  const payload = decodeJwtPayload()
+  const payload = decodeJwtPayload();
   const roleRaw =
-    (currentUser && currentUser.role) ||
-    deriveRoleFromPayload(payload) ||
-    ""
+    (currentUser && currentUser.role) || deriveRoleFromPayload(payload) || "";
 
-  return String(roleRaw || "").toLowerCase()
+  return String(roleRaw || "").toLowerCase();
 }

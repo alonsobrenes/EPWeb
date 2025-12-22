@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import React, { useEffect, useState, useMemo } from "react"
+import React, { useEffect, useState, useMemo, useRef } from "react"
 import {
   Box,
   Heading,
@@ -18,6 +18,7 @@ import client from "../api/client"
 import { TestsApi } from "../api/testsApi"
 import { PatientsApi } from "../api/patientsApi"
 import { generatePatientsByPeriodPdf } from "../reports/generatePatientsByPeriodPdf"
+import { generateOrgPatientsByProfessionalPdf } from "../reports/generateOrgPatientsByProfessionalPdf"
 import { toaster } from "../components/ui/toaster"
 import { useOrgKind } from "../context/OrgContext"
 import { getRole } from "../auth/role"
@@ -25,6 +26,7 @@ import {
   LuClipboardList,
   LuUsers,
   LuActivity,
+  LuCalendarCheck,
   LuChevronRight,
 } from "react-icons/lu"
 import { getCurrentUser } from "../auth/session"
@@ -36,6 +38,7 @@ import {
   YAxis,
   Tooltip,
   Line,
+  Legend
 } from "recharts"
 // -----------------------------
 // Helpers de auth / rol / org
@@ -110,7 +113,6 @@ function useClinicianDashboardData() {
   })
   const [recentPatients, setRecentPatients] = useState([])
   const [topTests, setTopTests] = useState([])
-
   useEffect(() => {
     let cancelled = false
 
@@ -283,9 +285,12 @@ function usePatientsByPeriodStats({ from, to }) {
   return { loading, stats }
 }
 
+
+
 function useOrgPatientsByProfessionalStats({ from, to }) {
   const [loading, setLoading] = useState(true)
-  const [items, setItems] = useState(null)
+  const [stats, setStats] = useState(null)
+
   useEffect(() => {
     let cancelled = false
 
@@ -293,33 +298,28 @@ function useOrgPatientsByProfessionalStats({ from, to }) {
       try {
         const params = { from, to }
         const { data } = await client.get(
-          "/orgs/patients-by-professional",
+          "/orgs/patients-by-professional/stats",
           { params },
         )
 
         if (!cancelled) {
-          setItems(Array.isArray(data) ? data : [])
+          setStats(data || null)
           setLoading(false)
         }
       } catch (err) {
-        console.error(
-          "Error loading org patients-by-professional stats",
-          err,
-        )
+        console.error("Error loading org patients-by-professional stats v2", err)
         if (!cancelled) {
-          setItems(null)
+          setStats(null)
           setLoading(false)
         }
       }
     }
 
     load()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [from, to])
 
-  return { loading, items }
+  return { loading, stats }
 }
 
 
@@ -361,6 +361,35 @@ function formatPatientName(p) {
   return full || p.name || "Paciente"
 }
 
+const parseCustomDateOrNull = (ymd) => {
+    if (!ymd) return null
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd)
+    if (!m) return null
+
+    const y = Number(m[1])
+    const mo = Number(m[2])
+    const d = Number(m[3])
+
+    // Límite SQL Server datetime
+    if (y < 1753 || y > 9999) return null
+    if (mo < 1 || mo > 12) return null
+    if (d < 1 || d > 31) return null
+
+    const dt = new Date(Date.UTC(y, mo - 1, d))
+    if (Number.isNaN(dt.getTime())) return null
+
+    // evita "correcciones" silenciosas (2025-02-31)
+    if (
+      dt.getUTCFullYear() !== y ||
+      dt.getUTCMonth() + 1 !== mo ||
+      dt.getUTCDate() !== d
+    ) {
+      return null
+    }
+
+    return dt
+  }
+
 // -----------------------------
 // Variante actual (clínico)
 // -----------------------------
@@ -375,6 +404,7 @@ function ClinicianDashboard({ role }) {
   const [rangeMode, setRangeMode] = useState("30d") // "today" | "yesterday" | "7d" | "30d" | "90d" | "custom"
   const [customFrom, setCustomFrom] = useState("")  // "yyyy-mm-dd"
   const [customTo, setCustomTo] = useState("")      // "yyyy-mm-dd"
+  const lastValidRangeRef = useRef(null)
 
   const {
     fromDate,
@@ -401,8 +431,17 @@ function ClinicianDashboard({ role }) {
 
     let from, to, label
 
+    // Base: rango válido anterior o default 30d
+    if (lastValidRangeRef.current) {
+      from = new Date(lastValidRangeRef.current.from)
+      to = new Date(lastValidRangeRef.current.to)
+      label = lastValidRangeRef.current.label ?? "últimos 30 días"
+    } else {
+      ;({ from, to } = buildRange(30))
+      label = "últimos 30 días"
+    }
+
     if (rangeMode === "today") {
-      // solo hoy
       const fromToday = new Date(todayUtc)
       const toToday = new Date(todayUtc)
       toToday.setUTCDate(toToday.getUTCDate() + 1)
@@ -410,40 +449,45 @@ function ClinicianDashboard({ role }) {
       to = toToday
       label = "hoy"
     } else if (rangeMode === "yesterday") {
-      // solo ayer
       const y = new Date(todayUtc)
-      y.setUTCDate(y.getUTCDate() - 1) // ayer 00:00
+      y.setUTCDate(y.getUTCDate() - 1)
       const toY = new Date(y)
-      toY.setUTCDate(toY.getUTCDate() + 1) // día siguiente a ayer (exclusivo)
+      toY.setUTCDate(toY.getUTCDate() + 1)
       from = y
       to = toY
       label = "ayer"
     } else if (rangeMode === "7d") {
-      ({ from, to } = buildRange(7))
+      ;({ from, to } = buildRange(7))
       label = "últimos 7 días"
     } else if (rangeMode === "90d") {
-      ({ from, to } = buildRange(90))
+      ;({ from, to } = buildRange(90))
       label = "últimos 90 días"
-    } else if (rangeMode === "custom" && customFrom && customTo) {
-      try {
-        const [y1, m1, d1] = customFrom.split("-").map(Number)
-        const [y2, m2, d2] = customTo.split("-").map(Number)
-        const fromUtc = new Date(Date.UTC(y1, m1 - 1, d1))
-        const toUtcBase = new Date(Date.UTC(y2, m2 - 1, d2))
-        // to exclusivo: día siguiente
-        toUtcBase.setUTCDate(toUtcBase.getUTCDate() + 1)
-        from = fromUtc
-        to = toUtcBase
+    } else if (rangeMode === "custom") {
+      const f = parseCustomDateOrNull(customFrom)
+      const t = parseCustomDateOrNull(customTo)
+
+      if (f && t && f <= t) {
+        const toEx = new Date(t)
+        toEx.setUTCDate(toEx.getUTCDate() + 1) // exclusivo
+        from = f
+        to = toEx
         label = "rango personalizado"
-      } catch {
-        ({ from, to } = buildRange(30))
-        label = "últimos 30 días"
+      } else {
+        // IMPORTANTÍSIMO:
+        // mientras el usuario teclea (0202), NO tocamos from/to
+        // y así NO se dispara request inválido
+        label = "rango personalizado"
       }
     } else {
-      // default = últimos 30 días
-      ({ from, to } = buildRange(30))
+      ;({ from, to } = buildRange(30))
       label = "últimos 30 días"
     }
+
+    // Persistimos el último rango válido SIEMPRE que from/to sean válidos
+    if (from instanceof Date && to instanceof Date && !Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
+      lastValidRangeRef.current = { from, to, label }
+    }
+
 
     // Etiquetas exactas dd/mm/yyyy – dd/mm/yyyy, sin problema de zona horaria
     const formatYmd = (iso) => {
@@ -472,7 +516,6 @@ function ClinicianDashboard({ role }) {
     loading: statsLoading,
     stats: patientsStats,
   } = usePatientsByPeriodStats({ from: fromIso, to: toIso })
-
   const isAdminLike = role === "admin" || role === "editor"
   const chartData = useMemo(() => {
   if (!patientsStats || !Array.isArray(patientsStats.series)) {
@@ -832,35 +875,132 @@ function SoloOwnerDashboard(props) {
   return <ClinicianDashboard {...props} />
 }
 
+function OrgMultiLineChart({ series }) {
+  const { chartData, lineDefs } = useMemo(() => {
+    const rows = Array.isArray(series) ? series : []
+    if (rows.length === 0) return { chartData: [], lineDefs: [] }
+
+    // claves por clinician
+    const clinicians = new Map()
+    for (const r of rows) {
+      const id = r.clinicianUserId
+      if (!id) continue
+      if (!clinicians.has(id)) {
+        clinicians.set(id, {
+          id,
+          key: `u${id}`,
+          name: r.clinicianFullName || `Profesional #${id}`,
+        })
+      }
+    }
+
+    // limitar a top 6 por sum(patientsCount) para no saturar
+    const totals = new Map()
+    for (const r of rows) {
+      const id = r.clinicianUserId
+      if (!id) continue
+      totals.set(id, (totals.get(id) || 0) + (Number(r.patientsCount) || 0))
+    }
+
+    const topIds = Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([id]) => id)
+
+    const lineDefs = topIds
+      .map((id) => clinicians.get(id))
+      .filter(Boolean)
+
+    // agrupar por fecha (yyyy-mm-dd)
+    const byDate = new Map()
+    for (const r of rows) {
+      const d = r.date ? new Date(r.date) : null
+      if (!d || Number.isNaN(d.getTime())) continue
+      const dateKey = d.toISOString().slice(0, 10)
+      if (!byDate.has(dateKey)) byDate.set(dateKey, {})
+      const obj = byDate.get(dateKey)
+
+      const id = r.clinicianUserId
+      const def = clinicians.get(id)
+      if (!def) continue
+      if (!topIds.includes(id)) continue
+
+      obj[def.key] = Number(r.patientsCount ?? 0) || 0
+    }
+
+    const dates = Array.from(byDate.keys()).sort()
+    const chartData = dates.map((dateKey) => {
+      const d = new Date(dateKey + "T00:00:00.000Z")
+      const label = `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+      return { label, ...byDate.get(dateKey) }
+    })
+
+    return { chartData, lineDefs }
+  }, [series])
+
+  if (chartData.length === 0 || lineDefs.length === 0) return null
+
+  // colores distintos (constante y simple)
+  const palette = ["#1A73E8","#188038", "#d9257fff", "#49e2f7de", "#A142F4", "#F9AB00", "#12B5CB"]
+
+  return (
+    <Box w="100%" h="320px" mb="4">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData} margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="label" fontSize={12} tickMargin={6} />
+          <YAxis allowDecimals={false} fontSize={12} tickMargin={4} />
+          <Tooltip />
+          <Legend />
+          {lineDefs.map((s, idx) => (
+            <Line
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              name={s.name}
+              stroke={palette[idx % palette.length]}
+              strokeWidth={2}
+              dot={{ r: 2 }}
+              activeDot={{ r: 4 }}
+            />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </Box>
+  )
+}
+
+
+
 function ClinicOwnerDashboard({ role, orgKind }) {
-  const [rangeMode, setRangeMode] = useState("30d") // "today" | "yesterday" | "7d" | "30d" | "90d" | "custom"
-  const [customFrom, setCustomFrom] = useState("")  // yyyy-mm-dd
-  const [customTo, setCustomTo] = useState("")      // yyyy-mm-dd
+  const [rangeMode, setRangeMode] = useState("30d") // today | yesterday | 7d | 30d | 90d | custom
+  const [customFrom, setCustomFrom] = useState("")
+  const [customTo, setCustomTo] = useState("")
+  const lastValidRangeRef = useRef(null)
 
-  const {
-    fromDate,
-    toDate,
-    fromIso,
-    toIso,
-    rangeLabelShort,
-    rangeLabelExact,
-  } = useMemo(() => {
+  const { fromDate, toDate, fromIso, toIso, rangeLabelShort, rangeLabelExact } = useMemo(() => {
     const now = new Date()
-
-    // Hoy en UTC, 00:00
-    const todayUtc = new Date(
-      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
-    )
+    const todayUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()))
 
     const buildRange = (days) => {
       const from = new Date(todayUtc)
-      from.setUTCDate(from.getUTCDate() - (days - 1)) // incluye hoy
+      from.setUTCDate(from.getUTCDate() - (days - 1))
       const to = new Date(todayUtc)
-      to.setUTCDate(to.getUTCDate() + 1) // exclusivo: mañana 00:00
+      to.setUTCDate(to.getUTCDate() + 1)
       return { from, to }
     }
 
     let from, to, label
+
+    // Base: rango válido anterior o default 30d
+    if (lastValidRangeRef.current) {
+      from = new Date(lastValidRangeRef.current.from)
+      to = new Date(lastValidRangeRef.current.to)
+      label = lastValidRangeRef.current.label ?? "últimos 30 días"
+    } else {
+      ;({ from, to } = buildRange(30))
+      label = "últimos 30 días"
+    }
 
     if (rangeMode === "today") {
       const fromToday = new Date(todayUtc)
@@ -878,32 +1018,40 @@ function ClinicOwnerDashboard({ role, orgKind }) {
       to = toY
       label = "ayer"
     } else if (rangeMode === "7d") {
-      ({ from, to } = buildRange(7))
+      ;({ from, to } = buildRange(7))
       label = "últimos 7 días"
     } else if (rangeMode === "90d") {
-      ({ from, to } = buildRange(90))
+      ;({ from, to } = buildRange(90))
       label = "últimos 90 días"
-    } else if (rangeMode === "custom" && customFrom && customTo) {
-      try {
-        const [y1, m1, d1] = customFrom.split("-").map(Number)
-        const [y2, m2, d2] = customTo.split("-").map(Number)
-        const fromUtc = new Date(Date.UTC(y1, m1 - 1, d1))
-        const toUtcBase = new Date(Date.UTC(y2, m2 - 1, d2))
-        toUtcBase.setUTCDate(toUtcBase.getUTCDate() + 1) // exclusivo
-        from = fromUtc
-        to = toUtcBase
+    } else if (rangeMode === "custom") {
+      const f = parseCustomDateOrNull(customFrom)
+      const t = parseCustomDateOrNull(customTo)
+
+      if (f && t && f <= t) {
+        const toEx = new Date(t)
+        toEx.setUTCDate(toEx.getUTCDate() + 1) // exclusivo
+        from = f
+        to = toEx
         label = "rango personalizado"
-      } catch {
-        ({ from, to } = buildRange(30))
-        label = "últimos 30 días"
+      } else {
+        // IMPORTANTÍSIMO:
+        // mientras el usuario teclea (0202), NO tocamos from/to
+        // y así NO se dispara request inválido
+        label = "rango personalizado"
       }
     } else {
-      ({ from, to } = buildRange(30))
+      ;({ from, to } = buildRange(30))
       label = "últimos 30 días"
     }
 
+    // Persistimos el último rango válido SIEMPRE que from/to sean válidos
+    if (from instanceof Date && to instanceof Date && !Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
+      lastValidRangeRef.current = { from, to, label }
+    }
+
+
     const formatYmd = (iso) => {
-      const [y, m, d] = iso.split("-")
+      const [y, m, d] = iso.slice(0, 10).split("-")
       return `${d}/${m}/${y}`
     }
 
@@ -924,17 +1072,55 @@ function ClinicOwnerDashboard({ role, orgKind }) {
     }
   }, [rangeMode, customFrom, customTo])
 
-  const {
-    loading: orgLoading,
-    items: orgStats,
-  } = useOrgPatientsByProfessionalStats({ from: fromIso, to: toIso })
+  const { loading: statsLoading, stats: orgStats } =
+    useOrgPatientsByProfessionalStats({ from: fromIso, to: toIso })
+
+  const series = orgStats?.series || []
+  const details = orgStats?.details || [] // se usa para PDF, no se muestra
+  const totalUniquePatients = orgStats?.totalUniquePatients ?? 0
+  const totalContacts = orgStats?.totalContacts ?? 0
+
+  const handleExportPdf = async () => {
+    if (!series) return
+    try {
+      const blob = await generateOrgPatientsByProfessionalPdf({
+        stats: orgStats,
+        fromIso,
+        toIso,
+      })
+      const fileName = `Pacientes-atendidos_${fromDate.toISOString().slice(0, 10)}_${toDate.toISOString().slice(0, 10)}.pdf`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      toaster.error({ title: 'Error generando PDF de pacientes atendidos', description: err })
+      console.log(err)
+      // aquí podrías usar tu toaster si quieres feedback al usuario
+    }
+  }
 
   return (
     <VStack align="stretch" gap="6" p="2">
-      {/* 1) Vista de profesional (la que ya tenías) */}
-      {/* <ClinicianDashboard role={role} orgKind={orgKind} /> */}
+      <Heading size="lg">Dashboard</Heading>
 
-      {/* 2) Nueva sección: actividad por profesional en la clínica */}
+      {/* KPIs */}
+      <SimpleGrid columns={{ base: 1, md: 3 }} gap="4">
+        <KpiCard
+          icon={LuCalendarCheck}
+          label="Visitas"
+          value={totalContacts}
+        />
+        <KpiCard
+          icon={LuUsers}
+          label="Pacientes únicos"
+          value={totalUniquePatients}
+        />
+      </SimpleGrid>
       <Card.Root p="4">
         <HStack
           justify="space-between"
@@ -996,9 +1182,7 @@ function ClinicOwnerDashboard({ role, orgKind }) {
 
             {rangeMode === "custom" && (
               <HStack spacing="2" pt="1" flexWrap="wrap">
-                <Text fontSize="xs" color="fg.muted">
-                  De:
-                </Text>
+                <Text fontSize="xs" color="fg.muted">De:</Text>
                 <Input
                   size="xs"
                   type="date"
@@ -1006,9 +1190,7 @@ function ClinicOwnerDashboard({ role, orgKind }) {
                   onChange={(e) => setCustomFrom(e.target.value)}
                   max={customTo || undefined}
                 />
-                <Text fontSize="xs" color="fg.muted">
-                  A:
-                </Text>
+                <Text fontSize="xs" color="fg.muted">A:</Text>
                 <Input
                   size="xs"
                   type="date"
@@ -1019,117 +1201,54 @@ function ClinicOwnerDashboard({ role, orgKind }) {
               </HStack>
             )}
           </VStack>
+
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={handleExportPdf}
+            isDisabled={statsLoading || !orgStats}
+          >
+            Exportar PDF
+          </Button>
         </HStack>
 
-        {orgLoading ? (
+        {statsLoading ? (
           <HStack gap="2">
             <Spinner size="sm" />
             <Text fontSize="sm" color="fg.muted">
               Cargando actividad por profesional…
             </Text>
           </HStack>
-        ) : !orgStats || orgStats.length === 0 ? (
+        ) : !orgStats ? (
           <Text fontSize="sm" color="fg.muted">
-            No hay actividad registrada en el período seleccionado.
+            No hay datos en el período seleccionado.
           </Text>
         ) : (
-          <Box w="100%" overflowX="auto">
-            <VStack as="div" align="stretch" gap="1" minW="600px">
-              {/* Encabezado */}
-              <HStack
-                px="2"
-                py="1"
-                borderBottom="1px solid"
-                borderColor="gray.200"
-              >
-                <Box flex="2">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Profesional
-                  </Text>
-                </Box>
-                <Box flex="2">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Paciente
-                  </Text>
-                </Box>
-                <Box flex="1" textAlign="right">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Pacientes únicos
-                  </Text>
-                </Box>
-                <Box flex="1" textAlign="right">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Contactos
-                  </Text>
-                </Box>
-                <Box flex="1" textAlign="right">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Tests
-                  </Text>
-                </Box>
-                <Box flex="1" textAlign="right">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Sesiones
-                  </Text>
-                </Box>
-                <Box flex="1" textAlign="right">
-                  <Text fontSize="xs" fontWeight="bold">
-                    Entrevistas
-                  </Text>
-                </Box>
-              </HStack>
+          <VStack align="stretch" gap="3">
+            <Text fontSize="sm" color="fg.muted">
+              Total pacientes únicos:{" "}
+              <Text as="span" fontWeight="medium" color="fg.default">
+                {totalUniquePatients}
+              </Text>{" "}
+              · Total contactos clínicos (sesiones, tests, entrevistas):{" "}
+              <Text as="span" fontWeight="medium" color="fg.default">
+                {totalContacts}
+              </Text>
+            </Text>
 
-              {/* Filas */}
-              {orgStats.map((row, idx) => {
-  const patientName = [
-    row.patientFirstName,
-    row.patientLastName1,
-    row.patientLastName2,
-  ].filter(Boolean).join(" ")
+            {Array.isArray(series) && series.length > 0 ? (
+              <OrgMultiLineChart series={series} />
+            ) : (
+              <Text fontSize="sm" color="fg.muted">
+                No hay datos para graficar en el período seleccionado.
+              </Text>
+            )}
 
-  return (
-    <HStack
-      key={`${row.clinicianUserId}-${row.patientId}-${idx}`}
-      px="2"
-      py="1"
-      borderBottom="1px solid"
-      borderColor="gray.100"
-    >
-      <Box flex="2">
-        <Text fontSize="sm">
-          {row.clinicianEmail || `Profesional #${row.clinicianUserId}`}
-        </Text>
-      </Box>
-
-      <Box flex="2">
-        <Text fontSize="sm">
-          {patientName || `Paciente #${String(row.patientId).slice(0, 8)}…`}
-        </Text>
-        {row.patientEmail && (
-          <Text fontSize="xs" color="fg.muted">
-            {row.patientEmail}
-          </Text>
-        )}
-      </Box>
-
-      <Box flex="1" textAlign="right">
-        <Text fontSize="sm">{row.contactsCount ?? 0}</Text>
-      </Box>
-      <Box flex="1" textAlign="right">
-        <Text fontSize="sm">{row.testsCount ?? 0}</Text>
-      </Box>
-      <Box flex="1" textAlign="right">
-        <Text fontSize="sm">{row.sessionsCount ?? 0}</Text>
-      </Box>
-      <Box flex="1" textAlign="right">
-        <Text fontSize="sm">{row.interviewsCount ?? 0}</Text>
-      </Box>
-    </HStack>
-  )
-})}
-
-            </VStack>
-          </Box>
+            {/* Details quedan disponibles para PDF (no se muestran) */}
+            <Box display="none" aria-hidden="true">
+              {details.length}
+            </Box>
+          </VStack>
         )}
       </Card.Root>
     </VStack>
@@ -1138,7 +1257,8 @@ function ClinicOwnerDashboard({ role, orgKind }) {
 
 
 function SystemAdminDashboard(props) {
-  return <ClinicianDashboard {...props} />
+  return <></>
+  //return <ClinicianDashboard {...props} />
 }
 
 // -----------------------------
