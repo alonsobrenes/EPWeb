@@ -307,7 +307,7 @@ function useOrgPatientsByProfessionalStats({ from, to }) {
           setLoading(false)
         }
       } catch (err) {
-        console.error("Error loading org patients-by-professional stats v2", err)
+        console.error("Error loading orgs/patients-by-professional/stats", err)
         if (!cancelled) {
           setStats(null)
           setLoading(false)
@@ -1268,6 +1268,8 @@ function SystemAdminDashboard(props) {
 export default function Dashboard() {
   const role = getRole()
   const { orgKind } = getRoleAndOrgKind()
+  console.log('role',role)
+  console.log('orgKind',orgKind)
   if (role === "admin") {
     return (
       <SystemAdminDashboard role={role} orgKind={orgKind} />

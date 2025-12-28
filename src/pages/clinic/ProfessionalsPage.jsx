@@ -11,6 +11,8 @@ import client, { apiOrigin } from "../../api/client"
 import { toaster } from '../../components/ui/toaster'
 import { Tip } from '../../components/ui/tooltip'
 import ProfessionalDialog from './ProfessionalDialog'
+import OrgAdminConsentDialog from "./OrgAdminConsentDialog";
+import OrgAdminConsentsApi from "../../api/orgAdminConsentsApi";
 
 
 function getErrorMessage(error) {
@@ -53,7 +55,12 @@ const OrgApi = {
   async listLabelsForProfessional(userId) {
     const { data } = await client.get('/labels/for', { params: { type: 'professional', id: userId } })
     return Array.isArray(data.items) ? data.items : []
-  }
+  },
+  async getAdminConsentLatest() {
+    const { data } = await client.get('/orgs/consent')
+    return data
+  },
+
 }
 
 function initialsFromEmail(email) {
@@ -178,7 +185,11 @@ export default function ProfessionalsPage() {
   const [labelsByUser, setLabelsByUser] = useState({})
 
   const [oneShotInitials, setOneShotInitials] = useState(null)
-
+  const [orgAdminConsent, setOrgAdminConsent] = useState(null)
+  const [loadingOrgAdminConsent, setLoadingOrgAdminConsent] = useState(false)
+  const [orgConsent, setOrgConsent] = useState(null)
+  const [loadingOrgConsent, setLoadingOrgConsent] = useState(false)
+  const [orgConsentOpen, setOrgConsentOpen] = useState(false)
 
   async function loadMembers() {
     setLoadingMembers(true)
@@ -237,10 +248,24 @@ export default function ProfessionalsPage() {
     }
   }
 
+  async function loadOrgAdminConsent() {
+    try {
+      setLoadingOrgAdminConsent(true)
+      const dto = await OrgApi.getAdminConsentLatest()
+      setOrgAdminConsent(dto)
+    } catch (err) {
+      console.error(err)
+      setOrgAdminConsent(null)
+    } finally {
+      setLoadingOrgAdminConsent(false)
+    }
+  }
+
   useEffect(() => {
     loadMembers()
     loadInvitations()
     loadSeats()
+    loadOrgAdminConsent()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -515,11 +540,30 @@ export default function ProfessionalsPage() {
       {/* Acciones arriba + (sin “Sin selección” cuando no hay) */}
       <HStack mb={3} wrap="wrap" gap="3" align="center">
         <ButtonGroup size="sm">
+          {!orgAdminConsent?.id ? (
+          <Button variant="outline" onClick={() => setOrgConsentOpen(true)}>
+            Firmar consentimiento
+          </Button>
+        ) : null}
           {!(typeof seats === 'number' && seats > 0 && (members?.length || 0) >= seats) && (
-            <Button leftIcon={<FiPlus />} onClick={() => setInviteOpen(true)} colorPalette="blue">
-              Invitar
-            </Button>
+            <Tip
+              label={
+                orgAdminConsent?.id
+                  ? "Invitar profesional"
+                  : "Debes firmar el consentimiento de organización antes de invitar profesionales."
+              }
+            >
+              <Button
+                leftIcon={<FiPlus />}
+                onClick={() => setInviteOpen(true)}
+                colorPalette="blue"
+                disabled={!orgAdminConsent?.id || loadingOrgAdminConsent}
+              >
+                Invitar
+              </Button>
+            </Tip>
           )}
+
           <Button
             leftIcon={<FiEdit2 />}
             onClick={() => selectedRow && openDialogFor(selectedRow)}
@@ -803,6 +847,16 @@ export default function ProfessionalsPage() {
           </Dialog.Positioner>
         </Portal>
       </Dialog.Root>
+
+      <OrgAdminConsentDialog
+  open={orgConsentOpen}
+  onClose={() => setOrgConsentOpen(false)}
+  onSigned={async (created) => {
+    setOrgConsent(created || null)
+    setOrgConsentOpen(false);
+    await loadOrgAdminConsent();
+  }}
+/>
     </>
   )
 }
